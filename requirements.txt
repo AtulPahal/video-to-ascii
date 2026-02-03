@@ -1,0 +1,7 @@
+yt-dlp
+opencv-python
+sty
+cursor
+pillow
+regex
+PyInquirer
