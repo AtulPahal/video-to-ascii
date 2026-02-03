@@ -1,0 +1,413 @@
+# Made by NexInfinite
+# Project started 10/06/21
+# ASCII Art
+# This is one big file, I hate it; working on a multi file system but am a lil lazy
+
+# Imports
+# Local imports
+import youtubedl_saver as ydls
+
+from colours import Colours
+from intro import intro
+from errors import *
+
+# External imports
+import cv2
+import os
+import sys
+import argparse
+import time
+import subprocess
+import shutil
+import regex as re
+import cursor
+import datetime
+
+from threading import Thread
+from sty import fg, bg
+from PIL import Image
+
+
+
+# Finishing up all the rendering.
+def finished_render():
+    global stopped, audio_process
+    # Show the cursor
+    cursor.show()
+    
+    # Kill audio if running
+    try:
+        if 'audio_process' in globals() and audio_process:
+            audio_process.terminate()
+            audio_process.wait()
+    except Exception:
+        pass
+
+    # Ending threads
+    stopped = True
+    try:
+        render_thread.join()
+        queue_thread.join()
+
+        # Cleaning up video
+        try:
+            os.remove("video")
+        except FileNotFoundError:
+            print("DEBUG: No previous video found.")
+
+        for i in range(image_buffer):  # Corrected from total_frames to iterate safely
+            try:
+                os.remove(f"frames/frame{i}.jpg")
+            except FileNotFoundError:
+                pass
+    except NameError:
+        print("DEBUG: Threads have not been started yet.")
+
+    # Exiting
+    print(f"\n{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Goodbye!{Colours.END}")
+    sys.exit()
+
+
+# Frame renderer
+def render_frame():
+    global buffer, queue, inverted, global_width, global_height, image_buffer, rendered_images, stopped
+
+    try:
+        while not stopped:
+            # Read next image from video
+            _success, _image = vidcap.read()
+            if _success:
+                # If there is still a frame render it and add it to frames
+                resize_image(_image)
+            elif not _success and not rendered_images:
+                # else start threads, making sure to only run this once
+                rendered_images = True
+                for thread in range(3):
+                    # Starting a thread and running it 3 times
+                    render_frame_thread = Thread(target=render_frame_buffer, args=[thread])
+                    try:
+                        render_frame_thread.start()
+                    except KeyboardInterrupt:
+                        render_frame_thread.join()
+                        finished_render()
+            elif frames == total_frames:
+                # Once video is over do this!
+                os.remove("video")
+                print(f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Goodbye!{Colours.END}")
+                stopped = True
+    except KeyboardInterrupt:
+        finished_render()
+
+
+def resize_image(_image):
+    global buffer, queue, inverted, global_width, global_height, image_buffer
+    
+    # Get terminal size
+    cols, lines = shutil.get_terminal_size((80, 24))
+    
+    # Calculate target dimensions to fit terminal
+    # 1 pixel = 2 chars width roughly roughly squares the pixel aspect in terminal
+    # Available width in pixels = cols / 2
+    # Available height in pixels = lines - 12 (margin for info text)
+    
+    max_w = cols // 2
+    # Ensure min height
+    max_h = max(lines - 12, 10)
+    
+    # Original video dimensions from current frame
+    v_height, v_width = _image.shape[:2]
+    
+    scale_w = max_w / v_width
+    scale_h = max_h / v_height
+    scale = min(scale_w, scale_h)
+    
+    target_w = int(v_width * scale)
+    target_h = int(v_height * scale)
+    
+    # Ensure at least 1x1
+    target_w = max(target_w, 1)
+    target_h = max(target_h, 1)
+
+    # Saving it as a smaller image
+    resized_image = cv2.resize(_image, (target_w, target_h))
+    cv2.imwrite(f"frames/frame{image_buffer}.jpg", resized_image)
+    image_buffer += 1
+
+
+def render_frame_buffer(thread):
+    global image_buffer, buffer
+    # Rendering an ascii image and adding to the queue to be used later
+    for frame in range(image_buffer):
+        if frame % 3 == thread:
+            # Using mod so that they render in sync
+            try:
+                _img = Image.open(f"frames/frame{frame}.jpg")
+
+                width, height = _img.size
+                pix = _img.load()
+
+                # Get the frame and add it to the queue (using recursion)
+                queue[frame] = "\n".join(get_full_frame(0, 0, height, width, [], pix))
+                os.remove(f"frames/frame{frame}.jpg")
+                buffer += 1
+            except Exception:
+                pass
+
+
+def get_x_frame(x, y, height, width, outputs, pix):
+    # Render each column (x) of an image using recursion.
+    if x == width - 2:
+        return outputs  # <-- The classic recursion ocr question (this is where the recursion occurs)
+    else:
+        # Anyway, here we render the row with different ascii characters based on their brightness
+        if watching_video:
+            ascii_outputs = {50: ["  ", fg.white],
+                             70: ["..", fg.li_grey],
+                             130: ["--", fg.li_grey],
+                             230: ["~~", fg.grey],
+                             240: ["++", fg.da_black],
+                             255: ["  ", fg.black]}
+        else:
+            # Expanded character set for better detail
+            ascii_outputs = {
+                25: "  ", 
+                50: "..", 
+                75: "::", 
+                100: "--", 
+                125: "==", 
+                150: "++", 
+                175: "**", 
+                200: "##", 
+                225: "%%", 
+                255: "@@"
+            }
+        r, g, b = pix[x, y]
+        brightness = sum([r, g, b]) / 3
+        
+        # Sort keys to ensure correct threshold check
+        thresholds = sorted(ascii_outputs.keys())
+        
+        for output in thresholds:
+            if brightness <= output:
+                # Appending to full frame and colouring each "pixel" of ascii characters according to pil
+                if not watching_video:
+                    outputs.append(fg(r, g, b) + ascii_outputs[output] + fg.rs)
+                    return get_x_frame(x + 1, y, height, width, outputs, pix)
+                else:
+                    outputs.append(bg(r, g, b) + ascii_outputs[output][1] + ascii_outputs[output][0] + fg.rs + bg.rs)
+                    return get_x_frame(x + 1, y, height, width, outputs, pix)
+
+
+def get_full_frame(x, y, height, width, full_frame, pix):
+    # More recursion, this time for each row (y)
+    if y == height - 2:
+        return full_frame
+    else:
+        # adding to full frame
+        x_frame = "".join(get_x_frame(0, y, height, width, [], pix))
+        full_frame.append(x_frame)
+        return get_full_frame(x, y + 1, height, width, full_frame, pix)
+
+
+# Framerate handler
+def run_queue():
+    global queue, framerate, frames, frame_begin_time, begin_time, restart
+    # This bit is a bit messy, this is what controls the queue
+    # Setting up some variables to stop repeats in the loop!
+    start = False
+    lock = False
+    timer = False
+    # Used for the second timer, means it wont repeat 1000s of times a second; after all we are in a while True loop
+    checker_second = 0
+    local_image_buffer = 0
+
+    while not stopped:
+        if len(queue) >= total_frames * buffer_amount - 1 and rendered_images:
+            # Checks when the images are fully rendered, then allows for ascii to start being generated
+            start = True
+
+        if frames == total_frames:
+            # Checks if the everything is over
+            return
+
+        if (len(queue) >= total_frames * buffer_amount - 1 or start) and lock:
+            if not timer:
+                # Begins the timer, we only want this to happen once, a couple other things start now
+                # Variables to stop repeating
+                start = True
+                timer = True
+
+                # Timings used to space out frames, this is very important
+                begin_time = datetime.datetime.now()
+                frame_begin_time = datetime.datetime.now()
+
+                # Starting the seconds timer, this is what actually displays the frames, this is explained below
+                render_second_thread = Thread(target=render_second)
+                render_second_thread.start()
+                
+                # Start audio
+                global audio_process
+                try:
+                    # using afplay on mac, it's generally available
+                    audio_process = subprocess.Popen(['afplay', 'video', '-q', '1'], 
+                                                   stdout=subprocess.DEVNULL, 
+                                                   stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+
+            # Gets the datetime, this is what allows for second resets; this bit is a little complicated so prepare for comment hell.
+            # When displaying frames for one second you would think it makes sense to take 1/framerate to space them out. This works
+            # but you need to remember to account for time taken to do calculations, this all adds up and before you know it you're 10
+            # seconds behind. There also may be things that 1 second only render 20 frames instead; this could be because of an external
+            # script or a slow pc. We don't want to be behind so we trigger a reset code every second; this allows the queue to catch
+            # up to the point its meant to be, this is what the following code is for!
+            checker = datetime.datetime.now() - begin_time
+            if round(checker.microseconds / 1000000, 1) == 0 and checker_second < checker.seconds:
+                # This checks if its the start of a second, we then change the checker_second so that this only happens once in this particular second.
+                # Setting restart to true allows the above comments to occur in the render_second_thread
+                restart = True
+                checker_second = checker.seconds
+        elif not start:
+            print(f"{Colours.GREEN}{Colours.BOLD}Buffering: {image_buffer}/{round(total_frames)}{Colours.END}")
+        elif not lock:
+            intro()
+            lock = True
+
+
+# Rendering 1 second of playtime
+def render_second():
+    global queue, framerate, frames, frame_begin_time, begin_time, restart, stopped
+    # setting time delay and the amount of frames we have rendered so far in this second
+    time_delay = (duration / total_frames)
+    render_frames = 0
+    while not stopped:
+        if restart:
+            # This is where the restart happens, if this is triggered it deletes all frames not rendered from the queue!
+            not_rendered = framerate - (render_frames % framerate)
+            if framerate > not_rendered > 0:
+                for _ in range(not_rendered):
+                    try:
+                        queue.pop(frames)
+                        frames += 1
+                    except IndexError:
+                        # This will ONLY occur if its the end of the video, so we can say Goodbye!
+                        print(f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Goodbye!{Colours.END}")
+                        finished_render()
+            # Resetting variables so that it doesn't trigger multiple times in 1 second.
+            render_frames = 0
+            restart = False
+            pass
+        else:
+            try:
+                if render_frames < framerate:
+                    # Popping the queue, this is incredibly useful to cut down on memory usage
+                    # We also increment frames and rendered frames
+                    item = queue.pop(frames)
+                    frames += 1
+                    render_frames += 1
+
+                    # Sleeping, this also accounts for the time taken for the frame to be rendered and other things slowing down your pc
+                    sleep = time_delay - ((datetime.datetime.now() - frame_begin_time).microseconds / 1000000)
+                    if sleep > 0:
+                        # Cant sleep a negative amount of time!
+                        time.sleep(sleep)
+                    # Starting the new time and finally outputting a frame
+                    frame_begin_time = datetime.datetime.now()
+                    display_frame(item)
+            except KeyError:
+                # Again this only happens once the video is over, we can say goodbye at this point!
+                print(f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Goodbye!{Colours.END}")
+                stopped = True
+                finished_render()
+
+
+def display_frame(item):
+    # Rendering an output as 1 message to try cut down on delays.
+    output = f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Information about the video{Colours.END}" \
+             f"\n{Colours.WARNING}{Colours.BOLD}Tabbing out may crash this, stopping the program is a bit buggy, may need to spam ctrl c till it stops.{Colours.END}" \
+             f"\n{Colours.GREEN}{Colours.BOLD}Is running in video mode? {watching_video}" \
+             f"\n{Colours.GREEN}{Colours.BOLD}Frame {frames}/{buffer} at {framerate}fps ({total_frames} frames in total){Colours.END}" \
+             f"\n{Colours.GREEN}{Colours.BOLD}{(datetime.datetime.now() - begin_time)}/{datetime.timedelta(seconds=duration)}{Colours.END}" \
+             f"\n{item}" \
+             f"\nMade by NexInfinite on Youtube and Github"
+    # Use ANSI escape codes to move cursor to top-left to avoid flickering
+    # \033[H moves cursor to home. \033[2J clears screen (optional, maybe causes flicker if used every frame)
+    # We use Home and overwrite.
+    print(f"\033[H{output}")
+
+
+if __name__ == "__main__":
+    # Get all the arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("vid", help="Where the video is located", type=str)
+    parser.add_argument("--framerate", dest="framerate", help="Frame rate (Default 30)", type=int, default=30)
+    parser.add_argument("--buffer", dest="buffer", help="Buffer amount 0-1", type=float, default=0)
+    parser.add_argument("--video_mode", dest="video_mode",
+                        help="Changes the rendering mode from character to highlighted", type=str, default="False")
+    args = parser.parse_args()
+
+    # Cleaning up from last render
+    try:
+        os.remove("video")
+    except FileNotFoundError:
+        print("DEBUG: No previous video found.")
+
+    try:
+        # Process arguments
+        if re.match('^(http(s)??\:\/\/)?(www\.)?((youtube\.com\/watch\?v=)|(youtu.be\/))([a-zA-Z0-9\-_]){11}',
+                    args.vid.lower()):
+            # Getting video information
+            video_location, framerate, total_frames, duration = ydls.save_file(args.vid)
+            vidcap = cv2.VideoCapture(video_location)
+            success, image = vidcap.read()
+
+            # Getting timing information
+            begin_time = datetime.datetime.now()
+            frame_begin_time = datetime.datetime.now()
+
+            # Setting up values
+            # Boolean values
+            restart = False
+            rendered_images = False
+            watching_video = True if args.video_mode.lower() == "true" else False
+            stopped = False
+
+            # Integer values
+            frames = 1
+            popped = 1
+            image_buffer = 0
+            buffer = 0
+            buffer_amount = args.buffer
+
+            queue = {}
+            cv2.imwrite(f"frames/frameTEST.jpg", image)
+            img = Image.open(f"frames/frameTEST.jpg")
+            global_width, global_height = img.size
+
+            # Creating threads
+            queue_thread = Thread(target=run_queue)
+            render_thread = Thread(target=render_frame)
+        else:
+            finished_render()
+            raise VideoNotYoutubeLink(args.vid)
+
+        try:
+            # Hiding cursor
+            cursor.hide()
+
+            # Starting threads
+            try:
+                render_thread.start()
+            except KeyboardInterrupt:
+                render_thread.join()
+                finished_render()
+
+            try:
+                queue_thread.start()
+            except KeyboardInterrupt:
+                queue_thread.join()
+                finished_render()
+        except KeyboardInterrupt:
+            finished_render()
+    except ValueError:
+        finished_render()
