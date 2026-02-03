@@ -17,7 +17,7 @@ Now supports full screen rendering and audio playback!
 ### Usage
 Run the script with a YouTube URL:
 ```bash
-python3 video_render.py "https://youtu.be/OfS1jFck8YQ"
+python3 video_render.py "yt-url"
 ```
 
 ### Features
