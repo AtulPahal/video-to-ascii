@@ -10,7 +10,7 @@ Now supports full screen rendering and audio playback!
 1. Clone the repository
 2. Install dependencies:
    ```bash
-   pip3 install yt-dlp opencv-python sty cursor pillow
+   pip3 install -r requirements.txt
    ```
    (Note: `pynput` is no longer required)
 
