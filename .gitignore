@@ -1,7 +1,0 @@
-!frames/.gitkeep
-video
-__pycache__/
-*.pyc
-.venv/
-.idea/
-.DS_Store
