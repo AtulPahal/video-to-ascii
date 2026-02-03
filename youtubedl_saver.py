@@ -8,7 +8,6 @@ def save_file(url):
         "format": "best[height<=480][ext=mp4]/best[ext=mp4]/best",
         "outtmpl": "video",
         "quiet": True,
-        # Try to avoid 403 by using android client
         "extractor_args": {"youtube": {"player_client": ["android", "web_creator"]}}
     }
     with youtube_dl.YoutubeDL(ydl_opts) as ydl:

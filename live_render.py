@@ -25,18 +25,15 @@ def render_image_thread(thread):
                 desired_image_buffer = framerate * (last_second + 1)
 
         if has_started and image_buffer < desired_image_buffer:
-            # Changing width and height to make it easier to render ascii art
             height = int(mon["height"] / 30)
             width = int(mon["width"] / 30)
 
-            # Resizing images with height, width and saving it#
             sct_img = sct.grab(mon)
             img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
             img = img.resize((width, height), Image.ANTIALIAS)
             pix = img.load()
             display_frame("\n".join(get_full_frame(0, 0, height, width, [], pix)), thread)
 
-            # Incrementing counters if image has saved!
             image_buffer += 1
             local_frames += 1
             fps += 1
@@ -44,12 +41,9 @@ def render_image_thread(thread):
 
 
 def get_x_frame(x, y, height, width, outputs, pix):
-    # Render each column (x) of an image using recursion.
     if x == width - 2:
-        return outputs  # <-- The classic recursion ocr question (this is where the recursion occurs)
+        return outputs
     else:
-        # Anyway, here we render the row with different ascii characters based on their brightness
-        # ascii_outputs = {51: "--", 70: "++", 130: "**", 180: "==", 255: "##"}
         if watching_video:
             ascii_outputs = {51: "--", 70: "++", 130: "**", 180: "==", 255: "##"}
         else:
@@ -63,7 +57,6 @@ def get_x_frame(x, y, height, width, outputs, pix):
         brightness = sum([r, g, b]) / 3
         for output in ascii_outputs:
             if brightness <= output:
-                # Appending to full frame and colouring each "pixel" of ascii characters according to pil
                 if watching_video:
                     outputs.append(fg(r, g, b) + ascii_outputs[output] + fg.rs)
                     return get_x_frame(x + 1, y, height, width, outputs, pix)
@@ -73,11 +66,9 @@ def get_x_frame(x, y, height, width, outputs, pix):
 
 
 def get_full_frame(x, y, height, width, full_frame, pix):
-    # More recursion, this time for each row (y)
     if y == height - 2:
         return full_frame
     else:
-        # adding to full frame
         x_frame = "".join(get_x_frame(0, y, height, width, [], pix))
         full_frame.append(x_frame)
         return get_full_frame(x, y + 1, height, width, full_frame, pix)
@@ -99,7 +90,6 @@ def timing_module():
 
 
 def display_frame(item, thread):
-    # Rendering an output as 1 message to try cut down on delays.
     output = f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Information{Colours.END}" \
              f"\n{Colours.WARNING}{Colours.BOLD}Rendered on thread: {thread}{Colours.END}" \
              f"\n{Colours.WARNING}{Colours.BOLD}Video mode (Right Shift to Toggle)? {watching_video}{Colours.END}" \
@@ -121,10 +111,8 @@ def input_checker(key):
 
 
 if __name__ == "__main__":
-    # creating arguments
     mon = {"top": 0, "left": 0, "width": 1920, "height": 1080}
 
-    # Creating the queue
     fps = 0
     image_buffer = 0
     framerate = 30
@@ -144,18 +132,15 @@ if __name__ == "__main__":
         except:
             pass
 
-    # Handling keyboard inputs
     listener = keyboard.Listener(
         on_press=input_checker)
     listener.start()
 
-    # Creating multi-threads
     video_capture_thread_0 = Thread(target=render_image_thread, args=[0])
     video_capture_thread_1 = Thread(target=render_image_thread, args=[1])
     video_capture_thread_2 = Thread(target=render_image_thread, args=[2])
     video_capture_thread_3 = Thread(target=render_image_thread, args=[3])
 
-    # Starting multi-threads
     sleep_time = 1 / 8
     print("Starting thread 0")
     time.sleep(sleep_time)
@@ -170,7 +155,6 @@ if __name__ == "__main__":
     time.sleep(sleep_time)
     video_capture_thread_3.start()
 
-    # Timing module (this ends everything)
     try:
         cursor.hide()
         timing_module()

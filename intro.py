@@ -3,7 +3,6 @@ import time
 import os
 
 
-# Into: Clear screen and countdown
 def intro():
     os.system("clear")
     print(f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Video is starting...{Colours.END}")
