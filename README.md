@@ -1,5 +1,5 @@
 # Video To ASCII
-A python generator that converts youtube videos to ascii art in your console. 
+A python generator that converts youtube videos to ascii art in your console.
 
 # Example
 ## Full Screen Mode
