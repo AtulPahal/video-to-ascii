@@ -9,4 +9,4 @@ def intro():
     for countdown in range(3, 0, -1):
         print(f"{Colours.WARNING}{Colours.BOLD}{countdown}{Colours.END}")
         time.sleep(1)
-    return True
+    return True 
