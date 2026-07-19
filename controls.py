@@ -56,13 +56,21 @@ class PlaybackControls:
 
     def start(self):
         """Begin listening for keyboard input."""
-        self._listener = keyboard.Listener(on_press=self.on_press)
-        self._listener.start()
+        try:
+            self._listener = keyboard.Listener(on_press=self.on_press)
+            self._listener.start()
+        except Exception as e:
+            print(f"\033[93mWarning: Could not start keyboard listener. "
+                  f"Keyboard controls will be disabled. (Error: {e})\033[0m")
+            self._listener = None
 
     def stop(self):
         """Stop the keyboard listener."""
         if self._listener:
-            self._listener.stop()
+            try:
+                self._listener.stop()
+            except Exception:
+                pass
 
     # --- thread-safe state queries ---
 

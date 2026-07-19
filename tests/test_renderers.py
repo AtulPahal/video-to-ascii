@@ -228,7 +228,43 @@ class TestVideoRender(unittest.TestCase):
         self.assertTrue(mock_thread_instance.start.called)
         self.assertTrue(mock_thread_instance.join.called)
 
+    @patch("sys.argv", ["video_render.py", "video.mp4"])
+    @patch("video_render.Thread")
+    def test_start_processing_threads(self, mock_thread_class):
+        args = video_render.parse_args()
+        player = video_render.ASCIIVideoPlayer(args)
+        player.video_cap = MagicMock()
+        
+        mock_thread_instance = MagicMock()
+        mock_thread_class.return_value = mock_thread_instance
+        
+        player._start_processing_threads(start_frame=10)
+        
+        self.assertFalse(player.all_frames_read)
+        self.assertEqual(player.frames_written, 10)
+        player.video_cap.set.assert_called_once_with(cv2.CAP_PROP_POS_FRAMES, 10)
+        self.assertEqual(mock_thread_class.call_count, 4)  # 1 reader + 3 converters
 
+    @patch("sys.argv", ["video_render.py", "video.mp4"])
+    @patch("cv2.resize")
+    def test_read_frames_seek(self, mock_resize):
+        args = video_render.parse_args()
+        player = video_render.ASCIIVideoPlayer(args)
+        player.video_cap = MagicMock()
+        
+        # Mock frame reads: first call returns true, second false
+        dummy_frame = MagicMock()
+        dummy_frame.shape = (480, 640, 3)
+        player.video_cap.read.side_effect = [(True, dummy_frame), (False, None)]
+        player.seek_request_frame = 20
+        player.stopped = False
+        
+        # Call read frames. Since we have seek_request_frame, it should seek.
+        player._read_frames()
+        
+        player.video_cap.set.assert_called_once_with(cv2.CAP_PROP_POS_FRAMES, 20)
+        self.assertEqual(player.frames_written, 21)  # start 20 + 1 frame read
+        self.assertTrue(player.all_frames_read)
 class TestLiveRender(unittest.TestCase):
 
     @patch("sys.argv", ["live_render.py", "--monitor", "0", "--region", "10,20,30,40", "--framerate", "15", "--scale", "2", "--video-mode", "--threads", "2"])

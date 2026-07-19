@@ -203,18 +203,18 @@ def convert_frame(pil_image, charset="standard", video_mode=False,
     if video_mode:
         frame_lines = [
             "".join([
-                f"\033[48;2;{p[0]};{p[1]};{p[2]}m{LUT_VIDEO_FG[b]}{LUT_VIDEO_CHAR[b]}\033[39m\033[49m"
+                f"\033[48;2;{p[0]};{p[1]};{p[2]}m{LUT_VIDEO_FG[b]}{LUT_VIDEO_CHAR[b]}"
                 for p, b in zip(row_pixels, row_brightness)
-            ])
+            ]) + "\033[39m\033[49m"
             for row_pixels, row_brightness in zip(pixels_list, brightness_list)
         ]
     else:
         lut = LUTS.get(charset, LUTS["standard"])
         frame_lines = [
             "".join([
-                f"\033[38;2;{p[0]};{p[1]};{p[2]}m{lut[b]}\033[39m"
+                f"\033[38;2;{p[0]};{p[1]};{p[2]}m{lut[b]}"
                 for p, b in zip(row_pixels, row_brightness)
-            ])
+            ]) + "\033[39m"
             for row_pixels, row_brightness in zip(pixels_list, brightness_list)
         ]
 

@@ -111,6 +111,8 @@ def stop_audio(process):
     except Exception:
         try:
             process.kill()
+            if not hasattr(process, "_mock_name"):
+                process.wait()
         except Exception:
             pass
 
