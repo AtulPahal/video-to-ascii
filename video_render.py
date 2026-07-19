@@ -24,7 +24,7 @@ from PIL import Image
 
 from ascii_convert import convert_frame, list_charsets
 from ascii_html import write_html
-from audio import detect_player, play_audio, stop_audio
+from audio import detect_player, play_audio, stop_audio, pause_audio, resume_audio
 from colours import Colours
 from controls import PlaybackControls
 
@@ -255,6 +255,7 @@ class ASCIIVideoPlayer:
         times_played = 0
         max_plays = self.loop_count  # 0 = once, -1 = infinite, N = N times
         all_cached = False
+        audio_was_paused = False
 
         while not self.stopped:
             if self.controls.should_quit():
@@ -271,16 +272,35 @@ class ASCIIVideoPlayer:
                     with self.lock:
                         for stale in range(idx):
                             self.queue.pop(stale, None)
+                
+                # Seek the audio by stopping and restarting at the new timestamp
+                stop_audio(self.audio_process)
+                current_time = idx / self.framerate if self.framerate > 0 else 0
+                self.audio_process = play_audio(self.audio_path, self.audio_player, start_time=current_time)
+                if audio_was_paused:
+                    pause_audio(self.audio_process)
 
             # --- Pause ---
             if self.controls.is_paused():
+                if not audio_was_paused:
+                    # Suspend audio. If not supported (e.g. Windows), stop it.
+                    if not pause_audio(self.audio_process):
+                        stop_audio(self.audio_process)
+                    audio_was_paused = True
                 if paused_frame is None:
                     paused_frame = self._make_paused_frame()
                 print(f"\033[H{paused_frame}")
                 time.sleep(0.1)
                 continue
-            paused_frame = None
 
+            # --- Resume ---
+            if audio_was_paused:
+                # Resume audio. If we had stopped it (e.g. on Windows), restart at the current timestamp.
+                if not resume_audio(self.audio_process):
+                    current_time = idx / self.framerate if self.framerate > 0 else 0
+                    self.audio_process = play_audio(self.audio_path, self.audio_player, start_time=current_time)
+                audio_was_paused = False
+            paused_frame = None
             # --- Check end / loop ---
             if idx >= self.total_frames:
                 times_played += 1
@@ -296,6 +316,7 @@ class ASCIIVideoPlayer:
                 # Restart audio for new loop
                 stop_audio(self.audio_process)
                 self._start_audio()
+                audio_was_paused = False
                 continue
 
             # --- Consume next frame ---
