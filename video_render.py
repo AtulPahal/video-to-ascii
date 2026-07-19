@@ -175,6 +175,9 @@ class ASCIIVideoPlayer:
             r'^(http(s)?://)?(www\.)?((youtube\.com/watch\?v=)|(youtu\.be/))([a-zA-Z0-9_-]{11})',
             vid
         ):
+            if vid.startswith("http") or "youtube" in vid or "youtu.be" in vid:
+                from errors import VideoNotYoutubeLink
+                raise VideoNotYoutubeLink(vid)
             print(f"{Colours.FAIL}Error: not a valid file path or YouTube URL{Colours.END}")
             return False
         # Download to a unique temp path so we never collide with user files
