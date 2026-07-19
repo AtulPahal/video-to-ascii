@@ -4,7 +4,6 @@ Downloads YouTube videos or loads local files and renders them as
 coloured ASCII art in the terminal.
 """
 
-from __future__ import print_function
 
 import argparse
 import atexit
@@ -13,28 +12,26 @@ import os
 import re
 import shutil
 import signal
-import subprocess
 import sys
 import tempfile
 import time
 from threading import Lock, Thread
-
+import queue
 import cursor
 import cv2
 from PIL import Image
-from sty import fg, bg
+
 
 from ascii_convert import convert_frame, list_charsets
 from ascii_html import write_html
 from audio import detect_player, play_audio, stop_audio
 from colours import Colours
 from controls import PlaybackControls
-from errors import VideoNotYoutubeLink
+
 import youtubedl_saver as ydls
 from intro import intro
 __version__ = "1.1.0"
-# Module-level temp dir for the atexit cleanup handler.
-_temp_dir = None
+
 
 
 def parse_args():
@@ -77,14 +74,8 @@ def parse_args():
 
 
 def cleanup():
-    """Restore cursor visibility and remove temporary frame directory."""
+    """Restore cursor visibility on exit."""
     cursor.show()
-    global _temp_dir
-    if _temp_dir and os.path.isdir(_temp_dir):
-        try:
-            shutil.rmtree(_temp_dir)
-        except OSError:
-            pass
 
 
 def _signal_handler(signum, frame):
@@ -126,8 +117,8 @@ class ASCIIVideoPlayer:
 
         self.queue = {}             # index -> ASCII string
         self.lock = Lock()
+        self.frame_queue = queue.Queue(maxsize=120)
 
-        self.temp_dir = None
         self.begin_time = None
         self.frame_begin_time = None
         self.audio_process = None
@@ -210,8 +201,9 @@ class ASCIIVideoPlayer:
     # ------------------------------------------------------------------
 
     def _read_frames(self):
-        """Reader thread: read video -> resize -> save JPEG to temp dir."""
+        """Reader thread: read video -> resize -> enqueue for conversion."""
         try:
+            render_size = None
             while not self.stopped:
                 ok, frame = self.video_cap.read()
                 if not ok:
@@ -219,42 +211,30 @@ class ASCIIVideoPlayer:
                         self.all_frames_read = True
                     break
                 h, w = frame.shape[:2]
-                tw, th = self._render_size(w, h)
+                if render_size is None:
+                    render_size = self._render_size(w, h)
+                tw, th = render_size
                 resized = cv2.resize(frame, (tw, th))
                 with self.lock:
                     idx = self.frames_written
-                # Write to disk FIRST, then publish the index
-                cv2.imwrite(os.path.join(self.temp_dir, f"f{idx}.jpg"), resized)
-                with self.lock:
                     self.frames_written = idx + 1
+                self.frame_queue.put((idx, resized))
         except KeyboardInterrupt:
             self.stopped = True
 
     def _convert_frames(self, tid, nthreads):
-        """Converter thread: pick JPEGs assigned to this tid, convert to ASCII."""
-        # Per-thread pointer avoids re-scanning already-checked frames
-        local_ptr = 0
+        """Converter thread: pull frames from queue and convert to ASCII."""
         while not self.stopped:
-            idx = None
-            with self.lock:
-                end = self.frames_written
-                # Scan from local_ptr, not from frames_converted
-                for i in range(max(local_ptr, 0), end):
-                    if i % nthreads == tid and i not in self.queue:
-                        idx = i
+            try:
+                idx, frame = self.frame_queue.get(timeout=0.1)
+            except queue.Empty:
+                with self.lock:
+                    if self.all_frames_read and self.frame_queue.empty():
                         break
-                if idx is None and self.all_frames_read and local_ptr >= end:
-                    break
-                if idx is not None:
-                    local_ptr = idx + 1
-
-            if idx is None:
-                time.sleep(0.005)
                 continue
 
-            path = os.path.join(self.temp_dir, f"f{idx}.jpg")
             try:
-                pil_img = Image.open(path).convert("RGB")
+                pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 lines = convert_frame(pil_img, charset=self.charset,
                                       video_mode=self.watching_video)
                 ascii_str = "\n".join(lines)
@@ -262,11 +242,9 @@ class ASCIIVideoPlayer:
                     self.queue[idx] = ascii_str
                     while self.frames_converted in self.queue:
                         self.frames_converted += 1
-                os.remove(path)
             except Exception as e:
                 if not self.stopped:
                     print(f"{Colours.FAIL}Error converting frame {idx}: {e}{Colours.END}", file=sys.stderr)
-
     def _play_loop(self):
         """Playback thread: consume queue at the correct framerate.
         Supports --loop (infinite or N repeats).
@@ -437,10 +415,6 @@ class ASCIIVideoPlayer:
         # Start keyboard controls listener
         self.controls.start()
 
-        # Temp directory
-        self.temp_dir = tempfile.mkdtemp(prefix="ascii_frames_")
-        global _temp_dir
-        _temp_dir = self.temp_dir
 
         # Start reader
         self._reader = Thread(target=self._read_frames, daemon=True)
