@@ -12,6 +12,8 @@ from errors import VideoNotYoutubeLink
 from intro import intro
 import ascii_convert
 import ascii_html
+import ascii as ascii_cli
+from questionary import ValidationError
 
 class TestColours(unittest.TestCase):
     def test_colours_attributes(self):
@@ -246,6 +248,97 @@ class TestAsciiHtml(unittest.TestCase):
         with open(empty_filepath, "r", encoding="utf-8") as f:
             empty_content = f.read()
         self.assertIn("No frames.", empty_content)
+class MockDocument:
+    def __init__(self, text):
+        self.text = text
+
+class TestAsciiCLI(unittest.TestCase):
+    def test_url_validator(self):
+        validator = ascii_cli.URLValidator()
+        # Valid URL
+        validator.validate(MockDocument("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+        validator.validate(MockDocument("https://youtu.be/dQw4w9WgXcQ"))
+        # Invalid URL
+        with self.assertRaises(ValidationError):
+            validator.validate(MockDocument("https://google.com"))
+        with self.assertRaises(ValidationError):
+            validator.validate(MockDocument("not_a_url"))
+
+    def test_file_validator(self):
+        validator = ascii_cli.FileValidator()
+        # Valid file
+        with patch("os.path.isfile", return_value=True):
+            validator.validate(MockDocument("video.mp4"))
+        # Invalid file
+        with patch("os.path.isfile", return_value=False):
+            with self.assertRaises(ValidationError):
+                validator.validate(MockDocument("missing.mp4"))
+
+    def test_buffer_validator(self):
+        validator = ascii_cli.BufferValidator()
+        # Valid buffer values
+        validator.validate(MockDocument("0"))
+        validator.validate(MockDocument("0.5"))
+        validator.validate(MockDocument("1"))
+        # Invalid values
+        with self.assertRaises(ValidationError):
+            validator.validate(MockDocument("-0.1"))
+        with self.assertRaises(ValidationError):
+            validator.validate(MockDocument("1.1"))
+        with self.assertRaises(ValidationError):
+            validator.validate(MockDocument("not_a_number"))
+
+    def test_positive_float_validator(self):
+        validator = ascii_cli.PositiveFloatValidator()
+        # Valid positive floats
+        validator.validate(MockDocument("0"))
+        validator.validate(MockDocument("1.5"))
+        # Invalid
+        with self.assertRaises(ValidationError):
+            validator.validate(MockDocument("-0.1"))
+        with self.assertRaises(ValidationError):
+            validator.validate(MockDocument("not_a_number"))
+
+    @patch("questionary.select")
+    @patch("questionary.text")
+    @patch("questionary.confirm")
+    def test_build_video_command_custom(self, mock_confirm, mock_text, mock_select):
+        # Mock answers for _build_video_command
+        # Select choices: 
+        # 1. Where is the video? -> Local file
+        # 2. Dithering method -> ordered
+        mock_select_instances = [MagicMock(), MagicMock()]
+        mock_select_instances[0].ask.return_value = "Local file"
+        mock_select_instances[1].ask.return_value = "ordered"
+        mock_select.side_effect = mock_select_instances
+
+        # Text inputs:
+        # 1. Path to local file -> video.mp4
+        # 2. Pre-buffer -> 0.2
+        # 3. Contrast -> 1.5
+        # 4. Brightness -> 0.8
+        mock_text_instances = [MagicMock(), MagicMock(), MagicMock(), MagicMock()]
+        mock_text_instances[0].ask.return_value = "video.mp4"
+        mock_text_instances[1].ask.return_value = "0.2"
+        mock_text_instances[2].ask.return_value = "1.5"
+        mock_text_instances[3].ask.return_value = "0.8"
+        mock_text.side_effect = mock_text_instances
+
+        # Confirms:
+        # 1. Use video mode? -> True
+        # 2. Customize advanced settings? -> True
+        mock_confirm_instances = [MagicMock(), MagicMock()]
+        mock_confirm_instances[0].ask.return_value = True
+        mock_confirm_instances[1].ask.return_value = True
+        mock_confirm.side_effect = mock_confirm_instances
+
+        cmd = ascii_cli._build_video_command()
+        self.assertIn("video.mp4", cmd)
+        self.assertIn("--buffer=0.2", cmd)
+        self.assertIn("--video-mode", cmd)
+        self.assertIn("--dither=ordered", cmd)
+        self.assertIn("--contrast=1.5", cmd)
+        self.assertIn("--brightness=0.8", cmd)
 
 if __name__ == "__main__":
     unittest.main()
