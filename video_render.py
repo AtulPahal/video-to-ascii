@@ -76,6 +76,12 @@ def parse_args():
     parser.add_argument("--loop", nargs="?", const=-1, default=0, type=int,
                         help="Loop playback: --loop for infinite, "
                              "--loop N for N times total (default: play once)")
+    parser.add_argument("--contrast", type=float, default=1.0,
+                        help="contrast enhancement factor")
+    parser.add_argument("--brightness", type=float, default=1.0,
+                        help="brightness enhancement factor")
+    parser.add_argument("--dither", choices=["none", "ordered", "floyd"], default="none",
+                        help="dither method")
     return parser.parse_args()
 
 
@@ -256,7 +262,10 @@ class ASCIIVideoPlayer:
             try:
                 pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 lines = convert_frame(pil_img, charset=self.charset,
-                                      video_mode=self.watching_video)
+                                      video_mode=self.watching_video,
+                                      contrast=self.args.contrast,
+                                      brightness=self.args.brightness,
+                                      dither=self.args.dither)
                 ascii_str = "\n".join(lines)
                 with self.lock:
                     self.queue[idx] = ascii_str
@@ -274,6 +283,7 @@ class ASCIIVideoPlayer:
         all_cached = False
         audio_was_paused = False
         max_plays = self.loop_count  # 0 = once, -1 = infinite, N = N times
+        pause_start = None
 
         try:
             while not self.stopped:
@@ -299,8 +309,17 @@ class ASCIIVideoPlayer:
                     if audio_was_paused:
                         pause_audio(self.audio_process)
 
+                    # Fix seek timing
+                    now = datetime.datetime.now()
+                    self.begin_time = now - datetime.timedelta(seconds=current_time)
+                    self.frame_begin_time = now
+                    if pause_start is not None:
+                        pause_start = now
+
                 # --- Pause ---
                 if self.controls.is_paused():
+                    if pause_start is None:
+                        pause_start = datetime.datetime.now()
                     if not audio_was_paused:
                         # Suspend audio. If not supported (e.g. Windows), stop it.
                         if not pause_audio(self.audio_process):
@@ -318,12 +337,31 @@ class ASCIIVideoPlayer:
                     continue
 
                 # --- Resume ---
+                if pause_start is not None:
+                    pause_duration = datetime.datetime.now() - pause_start
+                    self.begin_time += pause_duration
+                    self.frame_begin_time += pause_duration
+                    pause_start = None
+
                 if audio_was_paused:
                     # Resume audio. If we had stopped it (e.g. on Windows), restart at the current timestamp.
                     if not resume_audio(self.audio_process):
                         current_time = idx / self.framerate if self.framerate > 0 else 0
                         self.audio_process = play_audio(self.audio_path, self.audio_player, start_time=current_time)
                     audio_was_paused = False
+
+                # --- Frame dropping to prevent audio-video drift ---
+                now = datetime.datetime.now()
+                elapsed_seconds = (now - self.begin_time).total_seconds()
+                target_idx = int(elapsed_seconds * self.framerate * self.speed)
+                if target_idx > idx:
+                    if all_cached:
+                        idx = min(target_idx, self.total_frames - 1)
+                    else:
+                        with self.lock:
+                            for stale_idx in range(idx, min(target_idx, self.total_frames)):
+                                self.queue.pop(stale_idx, None)
+                        idx = min(target_idx, self.total_frames)
 
                 # --- Check end / loop ---
                 if idx >= self.total_frames:
@@ -337,6 +375,7 @@ class ASCIIVideoPlayer:
                     all_cached = True
                     self.begin_time = datetime.datetime.now()
                     self.frame_begin_time = datetime.datetime.now()
+                    pause_start = None
                     # Restart audio for new loop
                     stop_audio(self.audio_process)
                     self._start_audio()

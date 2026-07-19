@@ -17,84 +17,141 @@ import re
 _ANSI_RE = re.compile(r'\x1b\[([\d;]*)m')
 
 
+def xterm_256_to_rgb(idx):
+    """Convert xterm 256-color index to RGB tuple."""
+    if idx < 16:
+        colors = [
+            (0,0,0), (128,0,0), (0,128,0), (128,128,0), (0,0,128), (128,0,128), (0,128,128), (192,192,192),
+            (128,128,128), (255,0,0), (0,255,0), (255,255,0), (0,0,255), (255,0,255), (0,255,255), (255,255,255)
+        ]
+        return colors[idx]
+    elif idx < 232:
+        idx -= 16
+        r = (idx // 36) * 51
+        g = ((idx // 6) % 6) * 51
+        b = (idx % 6) * 51
+        return r, g, b
+    else:
+        v = (idx - 232) * 10 + 8
+        return v, v, v
+
+
 def _ansi_to_html(text):
     """
     Convert a string with ANSI colour codes to HTML with inline styles.
-
-    Handles the subset of ANSI codes emitted by ``sty``:
-      ``\\x1b[38;2;R;G;Bm``  — 24-bit foreground
-      ``\\x1b[48;2;R;G;Bm``  — 24-bit background
-      ``\\x1b[39m`` / ``\\x1b[49m`` / ``\\x1b[0m``  — reset
-      ``\\x1b[1m`` (bold), ``\\x1b[4m`` (underline),
-      ``\\x1b[91m``–``\\x1b[96m`` (bright ANSI colours)
+    Handles combined foreground and background styling, bold, underline,
+    bright ANSI colors, 8-bit xterm colors, and 24-bit true colors.
     """
     parts = []
     pos = 0
     span_open = False
+    style_changed = False
+
+    current_fg = None
+    current_bg = None
+    bold = False
+    underline = False
+
+    fg_colors = {
+        "30": "0,0,0", "31": "128,0,0", "32": "0,128,0", "33": "128,128,0",
+        "34": "0,0,128", "35": "128,0,128", "36": "0,128,128", "37": "192,192,192",
+        "90": "128,128,128", "91": "255,85,85", "92": "85,255,85", "93": "255,255,85",
+        "94": "85,85,255", "95": "255,85,255", "96": "85,255,255", "97": "255,255,255"
+    }
+
+    def compile_span():
+        """Compile HTML span with currently active styles."""
+        nonlocal span_open
+        if span_open:
+            parts.append("</span>")
+            span_open = False
+
+        styles = []
+        if current_fg:
+            styles.append(f"color:rgb({current_fg})")
+        if current_bg:
+            styles.append(f"background:rgb({current_bg})")
+        if bold:
+            styles.append("font-weight:bold")
+        if underline:
+            styles.append("text-decoration:underline")
+
+        if styles:
+            parts.append(f'<span style="{" ; ".join(styles)}">')
+            span_open = True
 
     for m in _ANSI_RE.finditer(text):
         # Emit text before this escape
         if m.start() > pos:
-            parts.append(html_mod.escape(text[pos:m.start()]))
+            chunk = text[pos:m.start()]
+            if style_changed:
+                compile_span()
+                style_changed = False
+            parts.append(html_mod.escape(chunk))
 
         code = m.group(1)
         pos = m.end()
 
-        # Reset
-        if code in ("0", "", "39", "49"):
-            if span_open:
-                parts.append("</span>")
-                span_open = False
-            continue
-
-        # Bold / underline — use <strong>/<u> for semantic HTML
-        if code == "1":
-            parts.append("<strong>")
-            continue
-        if code == "4":
-            parts.append("<u>")
-            continue
-
-        # Bright ANSI colours (used by sty for fg.rs / bg.rs fallbacks)
-        bright_fg = {
-            "91": "255;85;85", "92": "85;255;85", "93": "255;255;85",
-            "94": "85;85;255", "95": "255;85;255", "96": "85;255;255",
-        }
-        if code in bright_fg:
-            if span_open:
-                parts.append("</span>")
-            rgb = bright_fg[code]
-            parts.append(f'<span style="color:rgb({rgb})">')
-            span_open = True
-            continue
-
-        # 24-bit foreground
-        if code.startswith("38;2;"):
+        # Parse code
+        if code in ("0", ""):
+            current_fg = None
+            current_bg = None
+            bold = False
+            underline = False
+            style_changed = True
+        elif code == "39":
+            current_fg = None
+            style_changed = True
+        elif code == "49":
+            current_bg = None
+            style_changed = True
+        elif code == "1":
+            bold = True
+            style_changed = True
+        elif code == "4":
+            underline = True
+            style_changed = True
+        elif code in fg_colors:
+            current_fg = fg_colors[code]
+            style_changed = True
+        elif code.startswith("38;2;"):
             try:
                 _, _, r, g, b = code.split(";")
-                if span_open:
-                    parts.append("</span>")
-                parts.append(f'<span style="color:rgb({r},{g},{b})">')
-                span_open = True
+                current_fg = f"{r},{g},{b}"
+                style_changed = True
             except ValueError:
                 pass
-            continue
-
-        # 24-bit background
-        if code.startswith("48;2;"):
+        elif code.startswith("48;2;"):
             try:
                 _, _, r, g, b = code.split(";")
-                if span_open:
-                    parts.append("</span>")
-                parts.append(f'<span style="background:rgb({r},{g},{b})">')
-                span_open = True
+                current_bg = f"{r},{g},{b}"
+                style_changed = True
             except ValueError:
                 pass
-            continue
+        elif code.startswith("38;5;"):
+            try:
+                _, _, idx = code.split(";")
+                r, g, b = xterm_256_to_rgb(int(idx))
+                current_fg = f"{r},{g},{b}"
+                style_changed = True
+            except ValueError:
+                pass
+        elif code.startswith("48;5;"):
+            try:
+                _, _, idx = code.split(";")
+                r, g, b = xterm_256_to_rgb(int(idx))
+                current_bg = f"{r},{g},{b}"
+                style_changed = True
+            except ValueError:
+                pass
 
     # Remaining text
     if pos < len(text):
-        parts.append(html_mod.escape(text[pos:]))
+        chunk = text[pos:]
+        if style_changed:
+            compile_span()
+            style_changed = False
+        parts.append(html_mod.escape(chunk))
 
     if span_open:
         parts.append("</span>")

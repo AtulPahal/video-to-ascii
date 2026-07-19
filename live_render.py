@@ -9,6 +9,7 @@ from __future__ import print_function
 import re
 import shutil
 import sys
+import argparse
 import time
 from datetime import datetime as dt
 from threading import Lock, Thread
@@ -42,8 +43,7 @@ def _visible_length(s):
 # ---------------------------------------------------------------------------
 
 MONITOR = {"top": 0, "left": 0, "width": 1920, "height": 1080}
-FRAMERATE = 30
-SCALE_DIVISOR = 30       # Larger = smaller ASCII output (faster)
+args = None
 
 # ---------------------------------------------------------------------------
 # Shared mutable state
@@ -53,6 +53,7 @@ stopped = False
 watching_video = False   # Toggled with Right-Shift
 _watching_video_lock = Lock()
 _counter_lock = Lock()
+_timing_lock = Lock()
 fps_counter = 0
 image_buffer = 0
 reset = False
@@ -73,16 +74,21 @@ def timing_module():
     """Update the timing state every second."""
     global stopped, reset, last_second, has_started, start_time
 
-    last_second = 0
-    start_time = dt.now()
-    has_started = True
+    with _timing_lock:
+        last_second = 0
+        start_time = dt.now()
+        has_started = True
 
-    while not stopped:
+    while True:
+        with _timing_lock:
+            if stopped:
+                break
         now = dt.now()
-        elapsed = (now - start_time).seconds
-        if elapsed >= last_second + 1:
-            last_second += 1
-            reset = True
+        with _timing_lock:
+            elapsed = (now - start_time).seconds
+            if elapsed >= last_second + 1:
+                last_second += 1
+                reset = True
         time.sleep(0.05)
 
 
@@ -90,33 +96,68 @@ def render_image_thread(tid):
     """Capture screen region → convert to ASCII → display."""
     global fps_counter, image_buffer, reset
 
-    local_frames = 0
     sct = mss.mss()
 
-    while not stopped:
-        if reset:
-            local_frames = 0
-            reset = False
+    framerate = args.framerate if (args and hasattr(args, "framerate")) else 30
+    scale = args.scale if (args and hasattr(args, "scale")) else None
+    contrast = args.contrast if (args and hasattr(args, "contrast")) else 1.0
+    brightness = args.brightness if (args and hasattr(args, "brightness")) else 1.0
+    dither = args.dither if (args and hasattr(args, "dither")) else "none"
 
-        if has_started and last_second > 0:
-            desired = FRAMERATE * (last_second + 1)
+    while True:
+        with _timing_lock:
+            if stopped:
+                break
+            curr_reset = reset
+            if reset:
+                reset = False
+            curr_last_second = last_second
+            curr_has_started = has_started
+
+        if curr_has_started and curr_last_second > 0:
+            desired = framerate * (curr_last_second + 1)
             with _counter_lock:
                 ib = image_buffer
             if ib >= desired:
                 time.sleep(0.005)
                 continue
 
-        height = max(MONITOR["height"] // SCALE_DIVISOR, 1)
-        width = max(MONITOR["width"] // SCALE_DIVISOR, 1)
+        # Get target dimensions
+        if scale is not None:
+            height = max(MONITOR["height"] // scale, 1)
+            width = max(MONITOR["width"] // scale, 1)
+        else:
+            cols, lines = shutil.get_terminal_size((80, 24))
+            max_w = max(1, (cols - 2) // 2)
+            max_h = max(1, lines - 4)
+            aspect_ratio = MONITOR["width"] / MONITOR["height"]
+            
+            w1 = max_w
+            h1 = int(w1 / aspect_ratio)
+            if h1 <= max_h:
+                width = w1
+                height = max(1, h1)
+            else:
+                height = max_h
+                width = max(1, int(height * aspect_ratio))
 
+        # Grab and resize
         sct_img = sct.grab(MONITOR)
         img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+        
+        if hasattr(Image, "Resampling"):
+            resample_filter = Image.Resampling.LANCZOS
+        else:
+            resample_filter = Image.ANTIALIAS
+            
+            
+        img = img.resize((width, height), resample_filter)
+
         with _watching_video_lock:
             vm = watching_video
-        ascii_lines = convert_frame(img, video_mode=vm)
+        ascii_lines = convert_frame(img, video_mode=vm, contrast=contrast, brightness=brightness, dither=dither)
         display_frame("\n".join(ascii_lines), tid)
 
-        local_frames += 1
         with _counter_lock:
             fps_counter += 1
             image_buffer += 1
@@ -127,7 +168,9 @@ def render_image_thread(tid):
 def display_frame(item, tid):
     """Print a single frame to the terminal."""
     global _last_terminal_size
-    elapsed = dt.now() - start_time if start_time else 0
+    with _timing_lock:
+        curr_start_time = start_time
+    elapsed = dt.now() - curr_start_time if curr_start_time else 0
     elapsed_sec = int(elapsed.total_seconds()) if elapsed else 0
     elapsed_str = f"{elapsed_sec // 60:02d}:{elapsed_sec % 60:02d}"
 
@@ -194,14 +237,54 @@ def display_frame(item, tid):
     print(f"\033[H" + "\n".join(dashboard), end="", flush=True)
 
 def main():
-    global stopped, fps_counter, image_buffer, watching_video, start_time
+    global stopped, fps_counter, image_buffer, watching_video, start_time, args, MONITOR
+
+    parser = argparse.ArgumentParser(description="Live screen-capture renderer for video-to-ascii.")
+    parser.add_argument("--monitor", type=int, default=1, help="Monitor index to capture.")
+    parser.add_argument("--region", type=str, help="Bounding box coordinates as left,top,width,height.")
+    parser.add_argument("--framerate", type=int, default=30, help="Target frame rate.")
+    parser.add_argument("--scale", type=int, help="Fixed scale divisor.")
+    parser.add_argument("--video-mode", action="store_true", help="Start in video mode blocks.")
+    parser.add_argument("--threads", type=int, default=4, help="Number of capture/rendering threads.")
+    parser.add_argument("--contrast", type=float, default=1.0, help="contrast enhancement factor")
+    parser.add_argument("--brightness", type=float, default=1.0, help="brightness enhancement factor")
+    parser.add_argument("--dither", choices=["none", "ordered", "floyd"], default="none", help="dither method")
+    args = parser.parse_args()
+
+    with _watching_video_lock:
+        watching_video = args.video_mode
+
+    # Fetch actual coordinates using mss
+    with mss.mss() as sct:
+        if args.monitor < 0 or args.monitor >= len(sct.monitors):
+            print(f"Error: Monitor index {args.monitor} is out of range. Available monitors: 0 to {len(sct.monitors)-1}", file=sys.stderr)
+            sys.exit(1)
+        monitor_info = dict(sct.monitors[args.monitor])
+
+    if args.region:
+        try:
+            parts = [int(p.strip()) for p in args.region.split(',')]
+            if len(parts) == 4:
+                monitor_info = {
+                    "left": parts[0],
+                    "top": parts[1],
+                    "width": parts[2],
+                    "height": parts[3]
+                }
+            else:
+                raise ValueError("Expected 4 comma-separated values (left,top,width,height)")
+        except ValueError as e:
+            print(f"Error parsing region: {e}. Format must be left,top,width,height", file=sys.stderr)
+            sys.exit(1)
+
+    MONITOR = monitor_info
 
     # Start keyboard listener
     listener = keyboard.Listener(on_press=input_checker)
     listener.start()
 
     # Start capture threads
-    num_threads = 4
+    num_threads = args.threads
     threads = []
     for i in range(num_threads):
         t = Thread(target=render_image_thread, args=[i])
@@ -215,13 +298,13 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        stopped = True
+        with _timing_lock:
+            stopped = True
         cursor.show()
         for t in threads:
             t.join()
         listener.stop()
         print(f"\n{Colours.FAIL}{Colours.BOLD}Stopped.{Colours.END}")
-
 
 if __name__ == "__main__":
     if sys.platform == "darwin":

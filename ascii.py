@@ -95,6 +95,22 @@ class BufferValidator(Validator):
             )
 
 
+class PositiveFloatValidator(Validator):
+    def validate(self, document):
+        try:
+            val = float(document.text.strip())
+            if val < 0:
+                raise ValidationError(
+                    message="Value must be a positive number",
+                    cursor_position=len(document.text),
+                )
+        except ValueError:
+            raise ValidationError(
+                message="Value must be a valid float",
+                cursor_position=len(document.text),
+            )
+
+
 # ---------------------------------------------------------------------------
 # Build command
 # ---------------------------------------------------------------------------
@@ -170,12 +186,64 @@ def _build_video_command():
     else:
         charset_name = "standard"  # unused in video mode
 
+    # Advanced quality settings
+    customize_advanced = questionary.confirm(
+        "Customize advanced quality settings? (dithering, contrast, etc.)",
+        default=False,
+        style=style,
+    ).ask()
+
+    dither = "none"
+    contrast = "1.0"
+    brightness = "1.0"
+
+    if customize_advanced:
+        dither = questionary.select(
+            "Dithering method:",
+            choices=["none", "ordered", "floyd"],
+            default="none",
+            style=style,
+        ).ask()
+
+        contrast = questionary.text(
+            "Contrast enhancement factor:",
+            validate=PositiveFloatValidator,
+            default="1.0",
+            style=style,
+        ).ask()
+
+        brightness = questionary.text(
+            "Brightness enhancement factor:",
+            validate=PositiveFloatValidator,
+            default="1.0",
+            style=style,
+        ).ask()
+
     cmd_parts = ["uv", "run", sys.executable, "video_render.py", vid_arg]
     cmd_parts.append(f"--buffer={float(buffer_val.strip())}")
     if video_mode:
         cmd_parts.append("--video-mode")
     if charset_name != "standard":
         cmd_parts.append(f"--chars={charset_name}")
+
+    if dither and dither != "none":
+        cmd_parts.append(f"--dither={dither}")
+
+    if contrast:
+        try:
+            contrast_val = float(contrast.strip())
+            if contrast_val != 1.0:
+                cmd_parts.append(f"--contrast={contrast_val}")
+        except (ValueError, AttributeError):
+            pass
+
+    if brightness:
+        try:
+            brightness_val = float(brightness.strip())
+            if brightness_val != 1.0:
+                cmd_parts.append(f"--brightness={brightness_val}")
+        except (ValueError, AttributeError):
+            pass
 
     return cmd_parts
 
