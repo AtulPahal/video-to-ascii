@@ -9,7 +9,7 @@ from __future__ import print_function
 import sys
 import time
 from datetime import datetime as dt
-from threading import Thread
+from threading import Lock, Thread
 
 import cursor
 try:
@@ -45,6 +45,7 @@ SCALE_DIVISOR = 30       # Larger = smaller ASCII output (faster)
 
 stopped = False
 watching_video = False   # Toggled with Right-Shift
+_watching_video_lock = Lock()
 fps_counter = 0
 image_buffer = 0
 reset = False
@@ -57,7 +58,8 @@ def input_checker(key):
     """Toggle video mode on Right-Shift."""
     global watching_video
     if key == keyboard.Key.shift_r:
-        watching_video = not watching_video
+        with _watching_video_lock:
+            watching_video = not watching_video
 
 
 def timing_module():
@@ -100,9 +102,9 @@ def render_image_thread(tid):
 
         sct_img = sct.grab(MONITOR)
         img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-        img = img.resize((width, height), Image.LANCZOS)
-
-        ascii_lines = convert_frame(img, video_mode=watching_video)
+        with _watching_video_lock:
+            vm = watching_video
+        ascii_lines = convert_frame(img, video_mode=vm)
         display_frame("\n".join(ascii_lines), tid)
 
         image_buffer += 1
@@ -115,11 +117,13 @@ def render_image_thread(tid):
 def display_frame(item, tid):
     """Print a single frame to the terminal."""
     elapsed = dt.now() - start_time if start_time else 0
+    with _watching_video_lock:
+        _vm = watching_video
     output = (
         f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Information{Colours.END}\n"
         f"{Colours.WARNING}{Colours.BOLD}Rendered on thread: {tid}{Colours.END}\n"
         f"{Colours.WARNING}{Colours.BOLD}"
-        f"Video mode (Right Shift to toggle): {watching_video}{Colours.END}\n"
+        f"Video mode (Right Shift to toggle): {_vm}{Colours.END}\n"
         f"{Colours.GREEN}{Colours.BOLD}{elapsed}{Colours.END}\n"
         f"{item}\n"
         f"Made by Atul Pahal"

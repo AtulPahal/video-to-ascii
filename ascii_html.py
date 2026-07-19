@@ -3,11 +3,9 @@ Export ANSI-coloured ASCII frames to a self-contained HTML page.
 The page preserves colours and includes play/pause/seek controls.
 
 Usage:
-    from ascii_html import frames_to_html, write_html
-
     from ascii_html import write_html
-    html = frames_to_html(frames, fps=30, width=40, height=20)
-    write_html(html, "output.html")
+
+    write_html(frames, fps=30, "output.html")
 """
 
 from __future__ import print_function

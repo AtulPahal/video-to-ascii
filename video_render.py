@@ -31,6 +31,7 @@ from colours import Colours
 from controls import PlaybackControls
 from errors import VideoNotYoutubeLink
 import youtubedl_saver as ydls
+from intro import intro
 __version__ = "1.1.0"
 # Module-level temp dir for the atexit cleanup handler.
 _temp_dir = None
@@ -258,8 +259,9 @@ class ASCIIVideoPlayer:
                     while self.frames_converted in self.queue:
                         self.frames_converted += 1
                 os.remove(path)
-            except Exception:
-                pass
+            except Exception as e:
+                if not self.stopped:
+                    print(f"{Colours.FAIL}Error converting frame {idx}: {e}{Colours.END}", file=sys.stderr)
 
     def _play_loop(self):
         """Playback thread: consume queue at the correct framerate.
@@ -283,9 +285,10 @@ class ASCIIVideoPlayer:
                 # seek is in seconds; convert to frames
                 seek_frames = int(seek * self.framerate) if self.framerate > 0 else int(seek * 30)
                 idx = max(0, min(idx + seek_frames, self.total_frames - 1))
-                with self.lock:
-                    for stale in range(idx):
-                        self.queue.pop(stale, None)
+                if not all_cached:
+                    with self.lock:
+                        for stale in range(idx):
+                            self.queue.pop(stale, None)
 
             # --- Pause ---
             if self.controls.is_paused():
@@ -326,13 +329,15 @@ class ASCIIVideoPlayer:
             idx += 1
 
             # --- Timing ---
-            elapsed = (datetime.datetime.now() - self.frame_begin_time).total_seconds()
+            now = datetime.datetime.now()
+            elapsed = (now - self.frame_begin_time).total_seconds()
             remaining = delay - elapsed
             if remaining > 0:
                 time.sleep(remaining)
-            self.frame_begin_time = datetime.datetime.now()
+                now = datetime.datetime.now()  # re-read after sleep
+            self.frame_begin_time = now
 
-            self._show_frame(item, idx)
+            self._show_frame(item, idx, now)
             self._all_ascii_frames.append(item)
 
         self.stopped = True
@@ -352,9 +357,11 @@ class ASCIIVideoPlayer:
             f"\n{Colours.WARNING}PAUSED{Colours.END}\n"
         )
 
-    def _show_frame(self, item, num):
+    def _show_frame(self, item, num, now=None):
         """Print one frame to the terminal with progress bar and control hints."""
-        elapsed = datetime.datetime.now() - self.begin_time
+        if now is None:
+            now = datetime.datetime.now()
+        elapsed = now - self.begin_time
 
         # Progress bar
         pct = min(100, int(num / max(self.total_frames, 1) * 100))
@@ -445,7 +452,6 @@ class ASCIIVideoPlayer:
         if self.args.buffer > 0:
             print(f"{Colours.GREEN}Pre-buffering up to {target} frames…{Colours.END}")
 
-        from intro import intro
 
         while not self.stopped:
             if self.args.buffer > 0 and self.frames_converted < target:

@@ -39,16 +39,7 @@ def detect_player():
             )
             return candidate
         except (FileNotFoundError, subprocess.TimeoutExpired):
-            # check via sh/which as fallback
-            try:
-                subprocess.run(
-                    ["sh", "-c", f"command -v {candidate}"],
-                    capture_output=True,
-                    timeout=2,
-                )
-                return candidate
-            except Exception:
-                continue
+            continue
 
     # Windows fallback — try ffplay (from ffmpeg)
     if sys.platform == "win32":
