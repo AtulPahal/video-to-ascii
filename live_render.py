@@ -127,8 +127,7 @@ def display_frame(item, tid):
         f"{Colours.WARNING}{Colours.BOLD}"
         f"Video mode (Right Shift to toggle): {_vm}{Colours.END}\n"
         f"{Colours.GREEN}{Colours.BOLD}{elapsed}{Colours.END}\n"
-        f"{item}\n"
-        f"Made by Atul Pahal"
+        f"{item}"
     )
     print(f"\033[H{output}", end="")
 

@@ -362,8 +362,7 @@ class ASCIIVideoPlayer:
             f"{Colours.CYAN}{bar}{Colours.END}\n"
             f"{Colours.WARNING}"
             f"[Space] pause  [Q] quit  [←/→] seek 5s{Colours.END}\n"
-            f"{item}\n"
-            f"Made by Atul Pahal"
+            f"{item}"
         )
         # Check terminal resize each frame
         self._check_terminal_size()
