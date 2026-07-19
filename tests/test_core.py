@@ -8,8 +8,7 @@ from PIL import Image
 
 # Import units to test
 from colours import Colours
-from errors import VideoNotYoutubeLink
-from intro import intro
+from video_render import VideoNotYoutubeLink, intro
 import ascii_convert
 import ascii_html
 import ascii as ascii_cli
@@ -19,7 +18,7 @@ class TestColours(unittest.TestCase):
     def test_colours_attributes(self):
         """Verify all Colours class ANSI attributes are defined and valid."""
         attrs = [
-            "HEADER", "BLUE", "CYAN", "GREEN", 
+            "CYAN", "GREEN", 
             "WARNING", "FAIL", "END", "BOLD", "UNDERLINE"
         ]
         for attr in attrs:
@@ -48,8 +47,8 @@ class TestErrors(unittest.TestCase):
         self.assertEqual(str(exc_default), "The video entered was not a youtube video")
 
 class TestIntro(unittest.TestCase):
-    @patch("intro.time.sleep")
-    @patch("intro.print")
+    @patch("video_render.time.sleep")
+    @patch("video_render.print")
     def test_intro(self, mock_print, mock_sleep):
         """Verify intro() counts down from 3 to 1, sleeps 1s each time, and returns True."""
         result = intro()

@@ -29,7 +29,22 @@ from colours import Colours
 from controls import PlaybackControls
 
 import youtubedl_saver as ydls
-from intro import intro
+class VideoNotYoutubeLink(Exception):
+    def __init__(self, video_link: str, message: str = "The video entered was not a youtube video"):
+        self.video_link = video_link
+        self.message = message
+        super().__init__(self.message)
+
+
+def intro():
+    print("\033[2J\033[H", end="", flush=True)
+    print(f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Video is starting...{Colours.END}")
+    for countdown in range(3, 0, -1):
+        print(f"{Colours.WARNING}{Colours.BOLD}{countdown}{Colours.END}")
+        time.sleep(1)
+    return True
+
+
 __version__ = "1.1.0"
 
 _ANSI_STRIP_RE = re.compile(r'\x1b\[[0-9;]*m')
@@ -176,7 +191,6 @@ class ASCIIVideoPlayer:
             vid
         ):
             if vid.startswith("http") or "youtube" in vid or "youtu.be" in vid:
-                from errors import VideoNotYoutubeLink
                 raise VideoNotYoutubeLink(vid)
             print(f"{Colours.FAIL}Error: not a valid file path or YouTube URL{Colours.END}")
             return False
