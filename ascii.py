@@ -14,12 +14,40 @@ import sys
 from colours import Colours
 try:
     import questionary
-    from questionary import Validator
+    from questionary import Validator, ValidationError
 except ImportError:
     print(f"{Colours.FAIL}Missing dependency: questionary. Install with: uv pip install questionary{Colours.END}")
     sys.exit(1)
 
 from ascii_convert import list_charsets
+
+style = questionary.Style([
+    ('qmark', 'fg:#00f0ff bold'),       # Neon cyan question mark
+    ('question', 'bold'),               # Bold white question text
+    ('answer', 'fg:#00ff66 bold'),      # Neon green submitted answer
+    ('pointer', 'fg:#00f0ff bold'),     # Cyan pointer
+    ('highlighted', 'fg:#00f0ff bold'), # Cyan highlighted selection
+    ('instruction', 'fg:#666666'),      # Dim grey instructions
+])
+
+def print_banner():
+    banner_rows = [
+        r" __     ___     _               _____          _                    _ _ ",
+        r" \ \   / (_) __| | ___  ___    |_   _|__      / \   ___  ___  _   _(_|_)",
+        r"  \ \ / /| |/ _` |/ _ \/ _ \_____| |/ _ \____/ _ \ / __|/ __|| | | | | |",
+        r"   \ V / | | (_| |  __/ (_) |____| | (_) |__/ ___ \\__ \ (__ | |_| | | |",
+        r"    \_/  |_|\__,_|\___|\___/     |_|\___/  /_/   \_\___/\___| \__,_|_|_|"
+    ]
+    colors = [
+        "\033[96;1m",  # Bright Cyan
+        "\033[96m",    # Cyan
+        "\033[94;1m",  # Light Blue
+        "\033[94m",    # Blue
+        "\033[34m",    # Deep Blue
+    ]
+    for row, color in zip(banner_rows, colors):
+        print(f"{color}{row}\033[0m")
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +106,7 @@ def build_command():
             "Video — render a YouTube video or local file",
             "Screen — capture and render your screen live (laggy, lower quality)",
         ],
+        style=style,
     ).ask()
 
     if answers is None:
@@ -94,26 +123,23 @@ def _build_video_command():
     source = questionary.select(
         "Where is the video?",
         choices=["YouTube URL", "Local file"],
+        style=style,
     ).ask()
-    if source is None:
-        sys.exit(0)
 
     vid_arg = ""
     if source == "YouTube URL":
         url = questionary.text(
             "What's the YouTube URL?",
             validate=URLValidator,
+            style=style,
         ).ask()
-        if url is None:
-            sys.exit(0)
         vid_arg = url.strip()
     else:
         path = questionary.text(
             "Path to the video file:",
             validate=FileValidator,
+            style=style,
         ).ask()
-        if path is None:
-            sys.exit(0)
         vid_arg = path.strip()
 
     # Buffer
@@ -121,17 +147,15 @@ def _build_video_command():
         "How much to pre-buffer (0-1, 0 = minimal):",
         validate=BufferValidator,
         default="0",
+        style=style,
     ).ask()
-    if buffer_val is None:
-        sys.exit(0)
 
     # Video mode
     video_mode = questionary.confirm(
         "Use video mode? (background-coloured blocks, more vibrant)",
         default=False,
+        style=style,
     ).ask()
-    if video_mode is None:
-        sys.exit(0)
 
     # Character set (only in non-video mode)
     if not video_mode:
@@ -140,9 +164,8 @@ def _build_video_command():
             "Character set:",
             choices=[f"{k} — {v}" for k, v in charsets.items()],
             default="standard",
+            style=style,
         ).ask()
-        if charset is None:
-            sys.exit(0)
         charset_name = charset.split(" —")[0]
     else:
         charset_name = "standard"  # unused in video mode
@@ -184,6 +207,7 @@ def show_warning():
     agree = questionary.confirm(
         "I have read and agree to the statement above",
         default=False,
+        style=style,
     ).ask()
 
     if not agree:
@@ -197,6 +221,7 @@ def show_warning():
 
 def main():
     try:
+        print_banner()
         argv = build_command()
         show_warning()
 

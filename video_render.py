@@ -32,6 +32,12 @@ import youtubedl_saver as ydls
 from intro import intro
 __version__ = "1.1.0"
 
+_ANSI_STRIP_RE = re.compile(r'\x1b\[[0-9;]*m')
+
+def _visible_length(s):
+    """Return length of string without ANSI escape sequences."""
+    return len(_ANSI_STRIP_RE.sub('', s))
+
 
 
 def parse_args():
@@ -125,7 +131,9 @@ class ASCIIVideoPlayer:
         self.audio_player = None    # name of detected audio player
         self.controls = PlaybackControls()
         self._last_terminal_size = (0, 0)
-
+        self._last_shown_item = None
+        self._last_shown_idx = 0
+        self.times_played = 0
         # Thread references
         self._reader = None
         self._converters = []
@@ -185,8 +193,19 @@ class ASCIIVideoPlayer:
             return self.override_w, self.override_h
 
         cols, lines = shutil.get_terminal_size((80, 24))
-        max_w = cols // 2
-        max_h = max(lines - 12, 10)
+
+        if not hasattr(self, '_aspect_ratio_cache'):
+            self._aspect_ratio_cache = {}
+        cache_key = (cols, lines, frame_w, frame_h, self.watching_video, self.charset)
+        if cache_key in self._aspect_ratio_cache:
+            return self._aspect_ratio_cache[cache_key]
+
+        if self.charset == "minimal" and not self.watching_video:
+            max_w = cols - 2
+        else:
+            max_w = (cols - 2) // 2
+
+        max_h = max(lines - 8, 5)
 
         if self.override_w > 0:
             max_w = self.override_w
@@ -194,8 +213,9 @@ class ASCIIVideoPlayer:
             max_h = self.override_h
 
         scale = min(max_w / frame_w, max_h / frame_h)
-        return max(int(frame_w * scale), 1), max(int(frame_h * scale), 1)
-
+        res = max(int(frame_w * scale), 1), max(int(frame_h * scale), 1)
+        self._aspect_ratio_cache[cache_key] = res
+        return res
     # ------------------------------------------------------------------
     # Thread targets
     # ------------------------------------------------------------------
@@ -251,150 +271,229 @@ class ASCIIVideoPlayer:
         """
         delay = 1.0 / (self.framerate * self.speed)
         idx = 0
-        paused_frame = None
-        times_played = 0
-        max_plays = self.loop_count  # 0 = once, -1 = infinite, N = N times
         all_cached = False
         audio_was_paused = False
+        max_plays = self.loop_count  # 0 = once, -1 = infinite, N = N times
 
-        while not self.stopped:
-            if self.controls.should_quit():
-                self.stopped = True
-                break
+        try:
+            while not self.stopped:
+                if self.controls.should_quit():
+                    self.stopped = True
+                    break
 
-            # --- Seek ---
-            seek = self.controls.consume_seek()
-            if seek != 0:
-                # seek is in seconds; convert to frames
-                seek_frames = int(seek * self.framerate) if self.framerate > 0 else int(seek * 30)
-                idx = max(0, min(idx + seek_frames, self.total_frames - 1))
-                if not all_cached:
-                    with self.lock:
-                        for stale in range(idx):
-                            self.queue.pop(stale, None)
-                
-                # Seek the audio by stopping and restarting at the new timestamp
-                stop_audio(self.audio_process)
-                current_time = idx / self.framerate if self.framerate > 0 else 0
-                self.audio_process = play_audio(self.audio_path, self.audio_player, start_time=current_time)
-                if audio_was_paused:
-                    pause_audio(self.audio_process)
-
-            # --- Pause ---
-            if self.controls.is_paused():
-                if not audio_was_paused:
-                    # Suspend audio. If not supported (e.g. Windows), stop it.
-                    if not pause_audio(self.audio_process):
-                        stop_audio(self.audio_process)
-                    audio_was_paused = True
-                if paused_frame is None:
-                    paused_frame = self._make_paused_frame()
-                print(f"\033[H{paused_frame}")
-                time.sleep(0.1)
-                continue
-
-            # --- Resume ---
-            if audio_was_paused:
-                # Resume audio. If we had stopped it (e.g. on Windows), restart at the current timestamp.
-                if not resume_audio(self.audio_process):
+                # --- Seek ---
+                seek = self.controls.consume_seek()
+                if seek != 0:
+                    # seek is in seconds; convert to frames
+                    seek_frames = int(seek * self.framerate) if self.framerate > 0 else int(seek * 30)
+                    idx = max(0, min(idx + seek_frames, self.total_frames - 1))
+                    if not all_cached:
+                        with self.lock:
+                            for stale in range(idx):
+                                self.queue.pop(stale, None)
+                    
+                    # Seek the audio by stopping and restarting at the new timestamp
+                    stop_audio(self.audio_process)
                     current_time = idx / self.framerate if self.framerate > 0 else 0
                     self.audio_process = play_audio(self.audio_path, self.audio_player, start_time=current_time)
-                audio_was_paused = False
-            paused_frame = None
-            # --- Check end / loop ---
-            if idx >= self.total_frames:
-                times_played += 1
-                if max_plays == 0:
-                    break
-                if max_plays > 0 and times_played >= max_plays:
-                    break
-                # Reset for next loop
-                idx = 0
-                all_cached = True
-                self.begin_time = datetime.datetime.now()
-                self.frame_begin_time = datetime.datetime.now()
-                # Restart audio for new loop
-                stop_audio(self.audio_process)
-                self._start_audio()
-                audio_was_paused = False
-                continue
+                    if audio_was_paused:
+                        pause_audio(self.audio_process)
 
-            # --- Consume next frame ---
-            if not all_cached:
-                with self.lock:
-                    item = self.queue.pop(idx, None)
-                if item is None:
-                    time.sleep(0.001)
+                # --- Pause ---
+                if self.controls.is_paused():
+                    if not audio_was_paused:
+                        # Suspend audio. If not supported (e.g. Windows), stop it.
+                        if not pause_audio(self.audio_process):
+                            stop_audio(self.audio_process)
+                        audio_was_paused = True
+                    cols, _ = shutil.get_terminal_size((80, 24))
+                    if self._last_shown_item is not None:
+                        self._show_frame(self._last_shown_item, self._last_shown_idx, datetime.datetime.now(), status="PAUSED")
+                    else:
+                        fallback_top = f"\033[90m┌{'─' * (cols - 2)}┐\033[0m"
+                        fallback_mid = f"\033[90m│\033[0m\033[96;1m Loading... \033[0m{' ' * (cols - 16)}\033[90m│\033[0m"
+                        fallback_bot = f"\033[90m└{'─' * (cols - 2)}┘\033[0m"
+                        print(f"\033[H{fallback_top}\n{fallback_mid}\n{fallback_bot}", end="", flush=True)
+                    time.sleep(0.1)
                     continue
-            else:
-                item = self._all_ascii_frames[idx]
 
-            idx += 1
+                # --- Resume ---
+                if audio_was_paused:
+                    # Resume audio. If we had stopped it (e.g. on Windows), restart at the current timestamp.
+                    if not resume_audio(self.audio_process):
+                        current_time = idx / self.framerate if self.framerate > 0 else 0
+                        self.audio_process = play_audio(self.audio_path, self.audio_player, start_time=current_time)
+                    audio_was_paused = False
 
-            # --- Timing ---
-            now = datetime.datetime.now()
-            elapsed = (now - self.frame_begin_time).total_seconds()
-            remaining = delay - elapsed
-            if remaining > 0:
-                time.sleep(remaining)
-                now = datetime.datetime.now()  # re-read after sleep
-            self.frame_begin_time = now
+                # --- Check end / loop ---
+                if idx >= self.total_frames:
+                    self.times_played += 1
+                    if max_plays == 0:
+                        break
+                    if max_plays > 0 and self.times_played >= max_plays:
+                        break
+                    # Reset for next loop
+                    idx = 0
+                    all_cached = True
+                    self.begin_time = datetime.datetime.now()
+                    self.frame_begin_time = datetime.datetime.now()
+                    # Restart audio for new loop
+                    stop_audio(self.audio_process)
+                    self._start_audio()
+                    audio_was_paused = False
+                    continue
 
-            self._show_frame(item, idx, now)
-            self._all_ascii_frames.append(item)
+                # --- Consume next frame ---
+                if not all_cached:
+                    with self.lock:
+                        item = self.queue.pop(idx, None)
+                    if item is None:
+                        time.sleep(0.001)
+                        continue
+                else:
+                    item = self._all_ascii_frames[idx]
 
-        self.stopped = True
-        self._finish()
+                idx += 1
+                self._last_shown_item = item
+                self._last_shown_idx = idx
+
+                # --- Timing ---
+                now = datetime.datetime.now()
+                elapsed = (now - self.frame_begin_time).total_seconds()
+                remaining = delay - elapsed
+                if remaining > 0:
+                    time.sleep(remaining)
+                    now = datetime.datetime.now()  # re-read after sleep
+                self.frame_begin_time = now
+
+                self._show_frame(item, idx, now)
+                if not all_cached:
+                    self._all_ascii_frames.append(item)
+        finally:
+            self.stopped = True
+            self._finish()
 
 
-    def _make_paused_frame(self):
-        """Return a paused overlay string."""
-        elapsed = datetime.datetime.now() - self.begin_time
-        return (
-            f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}"
-            f"Information about the video{Colours.END}\n"
-            f"{Colours.WARNING}{Colours.BOLD}"
-            f"PAUSED — press Space to resume, Q to quit{Colours.END}\n"
-            f"{Colours.GREEN}{Colours.BOLD}"
-            f"{elapsed}/{datetime.timedelta(seconds=self.duration)}{Colours.END}\n"
-            f"\n{Colours.WARNING}PAUSED{Colours.END}\n"
-        )
-
-    def _show_frame(self, item, num, now=None):
-        """Print one frame to the terminal with progress bar and control hints."""
+    def _show_frame(self, item, num, now=None, status="PLAYING"):
+        """Print one frame to the terminal inside a Unicode Box Dashboard."""
         if now is None:
             now = datetime.datetime.now()
         elapsed = now - self.begin_time
 
-        # Progress bar
-        pct = min(100, int(num / max(self.total_frames, 1) * 100))
-        bar_w = 20
-        filled = int(bar_w * pct / 100)
-        bar = "[" + "=" * filled + ">" * min(1, bar_w - filled) + "." * (bar_w - filled - 1) + "]"
+        cols, lines = shutil.get_terminal_size((80, 24))
 
-        info = (
-            f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}"
-            f"Video-to-ASCII{Colours.END}\n"
-            f"{Colours.GREEN}{Colours.BOLD}"
-            f"Frame {num}/{self.total_frames} "
-            f"({pct}%)  "
-            f"{elapsed}/{datetime.timedelta(seconds=self.duration)}"
-            f"{Colours.END}\n"
-            f"{Colours.CYAN}{bar}{Colours.END}\n"
-            f"{Colours.WARNING}"
-            f"[Space/K] pause  [Q] quit  [←/→/J/L] seek 5s{Colours.END}\n"
-            f"{item}"
-        )
         # Check terminal resize each frame
         self._check_terminal_size()
-        print(f"\033[H{info}")
 
+        # Parse video dimensions and calculate margins
+        video_lines = item.splitlines()
+        vw = _visible_length(video_lines[0]) if video_lines else 0
+        pad_w = max(0, (cols - 2 - vw) // 2)
+        pad_right = max(0, cols - 2 - vw - pad_w)
+
+        # Style colors
+        border_color = "\033[90m"
+        border_end = "\033[0m"
+
+        # 1. Header
+        filename = os.path.basename(self.args.vid) if self.args.vid else "Video"
+        header_text = f" {filename} - {self.framerate:.1f} FPS - {status} "
+        header_styled = f"\033[96;1m{header_text}\033[0m"
+        header_len = len(header_text)
+
+        if cols - 2 >= header_len:
+            left_dashes = (cols - 2 - header_len) // 2
+            right_dashes = cols - 2 - header_len - left_dashes
+            top_line = f"{border_color}┌{'─' * left_dashes}{border_end}{header_styled}{border_color}{'─' * right_dashes}┐{border_end}"
+        else:
+            top_line = f"{border_color}┌{'─' * (cols - 2)}┐{border_end}"
+
+        # 2. Body lines (centered)
+        body_rows = []
+        for vl in video_lines:
+            body_rows.append(f"{border_color}│{border_end}{' ' * pad_w}{vl}{' ' * pad_right}{border_color}│{border_end}")
+
+        # 3. Divider
+        divider_line = f"{border_color}├{'─' * (cols - 2)}┤{border_end}"
+
+        # 4. Footer Line 1: Progress
+        pct = min(100, int(num / max(self.total_frames, 1) * 100))
+        bar_w = max(10, min(cols - 30, 40))
+        val = (pct / 100.0) * bar_w
+        full_blocks = int(val)
+        frac_part = val - full_blocks
+        frac_idx = int(frac_part * 8)
+        
+        if full_blocks >= bar_w:
+            bar_chars = "█" * bar_w
+        else:
+            frac_glyph = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"][frac_idx]
+            has_frac = 1 if frac_glyph else 0
+            empty_blocks = bar_w - full_blocks - has_frac
+            bar_chars = "█" * full_blocks + frac_glyph + "░" * empty_blocks
+
+        progress_text = f"Progress: [\033[96m{bar_chars}\033[0m] {pct}%"
+        progress_visible_len = 12 + bar_w + len(str(pct))
+        
+        left_margin = 2
+        right_space = cols - 2 - left_margin - progress_visible_len
+        if right_space < 0:
+            progress_line = f"{border_color}│{border_end}{progress_text}{border_color}│{border_end}"
+        else:
+            progress_line = f"{border_color}│{border_end}{' ' * left_margin}{progress_text}{' ' * right_space}{border_color}│{border_end}"
+
+        # 5. Footer Line 2: Time, Speed, Loop
+        elapsed_sec = int(elapsed.total_seconds()) if elapsed else 0
+        elapsed_str = f"{elapsed_sec // 60:02d}:{elapsed_sec % 60:02d}"
+        duration_sec = int(self.duration)
+        duration_str = f"{duration_sec // 60:02d}:{duration_sec % 60:02d}"
+
+        if self.loop_count == -1:
+            loop_str = f"{self.times_played + 1}/infinite"
+        elif self.loop_count == 0:
+            loop_str = "1/1"
+        else:
+            loop_str = f"{self.times_played + 1}/{self.loop_count}"
+
+        time_text = f"Time: {elapsed_str} / {duration_str}  |  Speed: {self.speed:.1f}x  |  Loop: {loop_str}"
+        time_visible_len = len(time_text)
+        right_space = cols - 2 - left_margin - time_visible_len
+        if right_space < 0:
+            time_line = f"{border_color}│{border_end}{time_text}{border_color}│{border_end}"
+        else:
+            time_line = f"{border_color}│{border_end}{' ' * left_margin}{time_text}{' ' * right_space}{border_color}│{border_end}"
+
+        # 6. Footer Line 3: Keys Help
+        keys_styled = "Keys: [\033[96mSpace/K\033[0m] Pause  [\033[96mQ\033[0m] Quit  [\033[96mJ/L/←/→\033[0m] Seek 5s"
+        keys_visible_len = 49
+        right_space = cols - 2 - left_margin - keys_visible_len
+        if right_space < 0:
+            keys_line = f"{border_color}│{border_end}{keys_styled}{border_color}│{border_end}"
+        else:
+            keys_line = f"{border_color}│{border_end}{' ' * left_margin}{keys_styled}{' ' * right_space}{border_color}│{border_end}"
+
+        # 7. Bottom border
+        bottom_line = f"{border_color}└{'─' * (cols - 2)}┘{border_end}"
+
+        # Assemble and print
+        dashboard = []
+        dashboard.append(top_line)
+        dashboard.extend(body_rows)
+        dashboard.append(divider_line)
+        dashboard.append(progress_line)
+        dashboard.append(time_line)
+        dashboard.append(keys_line)
+        dashboard.append(bottom_line)
+
+        print(f"\033[H" + "\n".join(dashboard), end="", flush=True)
 
     def _check_terminal_size(self):
         """Detect terminal resize and log if changed (recalc on next frame load)."""
         cur = shutil.get_terminal_size((80, 24))
         if cur != self._last_terminal_size:
             self._last_terminal_size = cur
+            # Clear terminal completely to avoid residual layout artifacts on resize
+            print("\033[2J\033[H", end="", flush=True)
 
     def _cleanup_owned(self):
         """Remove the downloaded video file and its parent temp directory."""
