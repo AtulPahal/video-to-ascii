@@ -16,8 +16,8 @@ def save_file(url, outtmpl=None):
         try:
             info = ydl.extract_info(url=url, download=True)
             fps = info.get('fps', 30)
-            total_frames = int(fps * info['duration'])
-            duration = info['duration']
+            duration = info.get('duration') or 0
+            total_frames = int(fps * duration)
         except Exception as e:
             print(f"Error downloading video: {e}")
             return "error", 0, 0, 0

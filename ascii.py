@@ -14,7 +14,7 @@ import sys
 from colours import Colours
 try:
     import questionary
-    from questionary import ValidationError, Validator
+    from questionary import Validator
 except ImportError:
     print(f"{Colours.FAIL}Missing dependency: questionary. Install with: uv pip install questionary{Colours.END}")
     sys.exit(1)
@@ -86,7 +86,7 @@ def build_command():
     if answers.startswith("Video"):
         return _build_video_command()
     else:
-        return ["uv", "run", "python3", "live_render.py"]
+        return ["uv", "run", sys.executable, "live_render.py"]
 
 
 def _build_video_command():
@@ -147,7 +147,7 @@ def _build_video_command():
     else:
         charset_name = "standard"  # unused in video mode
 
-    cmd_parts = ["uv", "run", "python3", "video_render.py", vid_arg]
+    cmd_parts = ["uv", "run", sys.executable, "video_render.py", vid_arg]
     cmd_parts.append(f"--buffer={float(buffer_val.strip())}")
     if video_mode:
         cmd_parts.append("--video-mode")

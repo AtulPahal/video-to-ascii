@@ -5,7 +5,7 @@ The page preserves colours and includes play/pause/seek controls.
 Usage:
     from ascii_html import write_html
 
-    write_html(frames, fps=30, "output.html")
+    write_html(frames, fps, path)
 """
 
 from __future__ import print_function

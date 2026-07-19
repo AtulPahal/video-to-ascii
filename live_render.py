@@ -15,17 +15,15 @@ import cursor
 try:
     import mss
 except ImportError:
-    import sys
     print("Missing dependency: mss. Install with: uv pip install mss")
     sys.exit(1)
 from PIL import Image
 try:
     from pynput import keyboard
 except ImportError:
-    import sys
     print("Missing dependency: pynput. Install with: uv pip install pynput")
     sys.exit(1)
-from sty import fg, bg
+
 
 from ascii_convert import convert_frame
 from colours import Colours
@@ -82,7 +80,7 @@ def timing_module():
 
 def render_image_thread(tid):
     """Capture screen region → convert to ASCII → display."""
-    global fps_counter, image_buffer, reset, has_started, last_second, stopped
+    global fps_counter, image_buffer, reset
 
     local_frames = 0
     sct = mss.mss()

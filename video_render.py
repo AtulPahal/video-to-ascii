@@ -399,11 +399,14 @@ class ASCIIVideoPlayer:
             self._last_terminal_size = cur
 
     def _cleanup_owned(self):
-        """Remove the downloaded video file if we created it."""
+        """Remove the downloaded video file and its parent temp directory."""
         if self._owned_video_path:
             try:
                 os.remove(self._owned_video_path)
-            except FileNotFoundError:
+                parent = os.path.dirname(self._owned_video_path)
+                if parent:
+                    os.rmdir(parent)
+            except (FileNotFoundError, OSError):
                 pass
 
 
