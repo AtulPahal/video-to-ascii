@@ -194,9 +194,9 @@ document.getElementById("nextBtn").onclick = function() {{
 }};
 
 document.addEventListener("keydown", function(e) {{
-  if (e.key === " ") {{ e.preventDefault(); document.getElementById("playBtn").click(); }}
-  if (e.key === "ArrowLeft") {{ document.getElementById("prevBtn").click(); }}
-  if (e.key === "ArrowRight") {{ document.getElementById("nextBtn").click(); }}
+  if (e.key === " " || e.key === "k" || e.key === "K") {{ e.preventDefault(); document.getElementById("playBtn").click(); }}
+  if (e.key === "ArrowLeft" || e.key === "j" || e.key === "J") {{ document.getElementById("prevBtn").click(); }}
+  if (e.key === "ArrowRight" || e.key === "l" || e.key === "L") {{ document.getElementById("nextBtn").click(); }}
 }});
 
 showFrame(0);

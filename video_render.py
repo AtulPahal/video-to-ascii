@@ -382,7 +382,7 @@ class ASCIIVideoPlayer:
             f"{Colours.END}\n"
             f"{Colours.CYAN}{bar}{Colours.END}\n"
             f"{Colours.WARNING}"
-            f"[Space] pause  [Q] quit  [←/→] seek 5s{Colours.END}\n"
+            f"[Space/K] pause  [Q] quit  [←/→/J/L] seek 5s{Colours.END}\n"
             f"{item}"
         )
         # Check terminal resize each frame

@@ -113,9 +113,10 @@ uv run python3 live_render.py
 
 | Key | Action |
 |---|---|
-| **Space** | Pause / resume |
+| **Space / K** | Pause / resume |
 | **Q** | Quit |
-| **← / →** | Seek backward / forward ~5 seconds |
+| **← / J** | Seek backward ~5 seconds |
+| **→ / L** | Seek forward ~5 seconds |
 
 ## How it works
 

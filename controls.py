@@ -43,13 +43,13 @@ class PlaybackControls:
             except AttributeError:
                 k = key
 
-            if k == " ":
+            if k == " " or k in ("k", "K"):
                 self._paused = not self._paused
             elif k in ("q", "Q"):
                 self._quit_flag = True
-            elif k == keyboard.Key.right:
+            elif k == keyboard.Key.right or k in ("l", "L"):
                 self._seek_offset += self.SEEK_STEP_SECONDS
-            elif k == keyboard.Key.left:
+            elif k == keyboard.Key.left or k in ("j", "J"):
                 self._seek_offset -= self.SEEK_STEP_SECONDS
 
     # --- lifecycle ---
