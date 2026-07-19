@@ -1,335 +1,534 @@
+"""
+Video renderer for video-to-ascii.
+Downloads YouTube videos or loads local files and renders them as
+coloured ASCII art in the terminal.
+"""
 
-import youtubedl_saver as ydls
+from __future__ import print_function
 
-from colours import Colours
-from intro import intro
-from errors import *
-
-
-import cv2
-import os
-import sys
 import argparse
-import time
-import subprocess
-import shutil
-import regex as re
-import cursor
+import atexit
 import datetime
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from threading import Lock, Thread
 
-from threading import Thread
-from sty import fg, bg
+import cursor
+import cv2
 from PIL import Image
+from sty import fg, bg
+
+from ascii_convert import convert_frame, list_charsets
+from ascii_html import write_html
+from audio import detect_player, play_audio, stop_audio
+from colours import Colours
+from controls import PlaybackControls
+from errors import VideoNotYoutubeLink
+import youtubedl_saver as ydls
+__version__ = "1.1.0"
+# Module-level temp dir for the atexit cleanup handler.
+_temp_dir = None
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Render a YouTube video or local file as coloured ASCII art "
+                    "in the terminal."
+    )
+    parser.add_argument("vid", nargs="?",
+                        help="YouTube URL or path to a local video file")
+    parser.add_argument("--framerate", type=int, default=30,
+                        help="Target framerate (default: 30, auto-detected for local files)")
+    parser.add_argument("--buffer", type=float, default=0,
+                        help="Pre-buffer amount as fraction of total frames, 0-1 (default: 0)")
+    parser.add_argument("--video-mode", dest="video_mode", action="store_true",
+                        help="Use background-coloured blocks for more vibrant output")
+    parser.add_argument("--chars", default="standard",
+                        help="Character set for colour mode: "
+                             + ", ".join(list_charsets().keys())
+                             + " (default: standard)")
+    parser.add_argument("--list-charsets", action="store_true",
+                        help="List available character sets and exit")
+    parser.add_argument("--export-html", metavar="FILE",
+                        help="Save ASCII animation to an HTML file for sharing")
+    parser.add_argument("--no-audio", action="store_true",
+                        help="Disable audio playback")
+    parser.add_argument("--width", type=int, default=0,
+                        help="Override output width in character columns")
+    parser.add_argument("--height", type=int, default=0,
+                        help="Override output height in character rows")
+    parser.add_argument("--speed", type=float, default=1.0,
+                        help="Playback speed multiplier (e.g. 0.5 = half speed, 2.0 = double)")
+    parser.add_argument("--version", action="store_true",
+                        help="Show version number and exit")
+    parser.add_argument("--no-intro", action="store_true",
+                        help="Skip the 3-2-1 countdown before playback")
+    parser.add_argument("--loop", nargs="?", const=-1, default=0, type=int,
+                        help="Loop playback: --loop for infinite, "
+                             "--loop N for N times total (default: play once)")
+    return parser.parse_args()
 
 
-def finished_render():
-    global stopped, audio_process
-
+def cleanup():
+    """Restore cursor visibility and remove temporary frame directory."""
     cursor.show()
-    
-    try:
-        if 'audio_process' in globals() and audio_process:
-            audio_process.terminate()
-            audio_process.wait()
-    except Exception:
-        pass
-
-    stopped = True
-    try:
-        render_thread.join()
-        queue_thread.join()
-
+    global _temp_dir
+    if _temp_dir and os.path.isdir(_temp_dir):
         try:
-            os.remove("video")
-        except FileNotFoundError:
-            print("DEBUG: No previous video found.")
+            shutil.rmtree(_temp_dir)
+        except OSError:
+            pass
 
-        for i in range(image_buffer):
+
+def _signal_handler(signum, frame):
+    """Convert termination signals into KeyboardInterrupt."""
+    raise KeyboardInterrupt()
+
+
+class ASCIIVideoPlayer:
+    """Orchestrates loading, buffering, and terminal playback of a video as ASCII."""
+
+    def __init__(self, args):
+        self.args = args
+        self.watching_video = args.video_mode
+        self.charset = args.chars
+        self.no_audio = args.no_audio
+        self.speed = args.speed
+        self.loop_count = args.loop
+        self.no_intro = args.no_intro
+        self.override_w = args.width
+        self.override_h = args.height
+
+        # Populated by load_video()
+        self.framerate = args.framerate
+        self.total_frames = 0
+        self.duration = 0
+        self.video_cap = None
+        self.audio_path = None
+        self._owned_video_path = None   # set only for downloaded YouTube files
+
+        self.export_html = args.export_html
+        self._all_ascii_frames = []       # accumulated for loop cache / HTML export
+
+        # Threading state
+        self.stopped = False
+        self.frames_written = 0     # frames saved as JPEG
+        self.frames_converted = 0   # frames turned into ASCII (sequential watermark)
+        self.all_frames_read = False
+        self.playback_started = False
+
+        self.queue = {}             # index -> ASCII string
+        self.lock = Lock()
+
+        self.temp_dir = None
+        self.begin_time = None
+        self.frame_begin_time = None
+        self.audio_process = None
+        self.audio_player = None    # name of detected audio player
+        self.controls = PlaybackControls()
+
+        # Thread references
+        self._reader = None
+        self._converters = []
+        self._player = None
+
+    # ------------------------------------------------------------------
+    # Video loading
+    # ------------------------------------------------------------------
+
+    def load_video(self):
+        """Open a local file or download a YouTube URL.  Returns True on success."""
+        vid = self.args.vid
+
+        if os.path.isfile(vid):
+            # --- Local file ---
+            cap = cv2.VideoCapture(vid)
+            if not cap.isOpened():
+                print(f"{Colours.FAIL}Error: cannot open video file '{vid}'{Colours.END}")
+                return False
+            self.framerate = cap.get(cv2.CAP_PROP_FPS) or float(self.args.framerate)
+            self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            self.duration = self.total_frames / self.framerate if self.framerate > 0 else 0
+            cap.release()
+            self.video_cap = cv2.VideoCapture(vid)
+            self.audio_path = vid
+            print(f"{Colours.GREEN}Local file: {vid}  "
+                  f"{self.total_frames} frames @ {self.framerate:.1f} fps, "
+                  f"{self.duration:.1f}s{Colours.END}")
+            return True
+
+        # --- YouTube URL ---
+        if not re.match(
+            r'^(http(s)?://)?(www\.)?((youtube\.com/watch\?v=)|(youtu\.be/))([a-zA-Z0-9_-]{11})',
+            vid
+        ):
+            print(f"{Colours.FAIL}Error: not a valid file path or YouTube URL{Colours.END}")
+            return False
+        # Download to a unique temp path so we never collide with user files
+        temp_download = os.path.join(tempfile.mkdtemp(prefix="ytdl_"), "video.mp4")
+        video_location, self.framerate, self.total_frames, self.duration = ydls.save_file(
+            vid, outtmpl=temp_download
+        )
+        if video_location == "error":
+            return False
+        self.audio_path = temp_download
+        self._owned_video_path = temp_download
+        self.video_cap = cv2.VideoCapture(temp_download)
+        return True
+
+    # ------------------------------------------------------------------
+    # Sizing
+    # ------------------------------------------------------------------
+
+    def _render_size(self, frame_w, frame_h):
+        """Return (target_w, target_h) in character-cells."""
+        if self.override_w > 0 and self.override_h > 0:
+            return self.override_w, self.override_h
+
+        cols, lines = shutil.get_terminal_size((80, 24))
+        max_w = cols // 2
+        max_h = max(lines - 12, 10)
+
+        if self.override_w > 0:
+            max_w = self.override_w
+        if self.override_h > 0:
+            max_h = self.override_h
+
+        scale = min(max_w / frame_w, max_h / frame_h)
+        return max(int(frame_w * scale), 1), max(int(frame_h * scale), 1)
+
+    # ------------------------------------------------------------------
+    # Thread targets
+    # ------------------------------------------------------------------
+
+    def _read_frames(self):
+        """Reader thread: read video -> resize -> save JPEG to temp dir."""
+        try:
+            while not self.stopped:
+                ok, frame = self.video_cap.read()
+                if not ok:
+                    with self.lock:
+                        self.all_frames_read = True
+                    break
+                h, w = frame.shape[:2]
+                tw, th = self._render_size(w, h)
+                resized = cv2.resize(frame, (tw, th))
+                with self.lock:
+                    idx = self.frames_written
+                # Write to disk FIRST, then publish the index
+                cv2.imwrite(os.path.join(self.temp_dir, f"f{idx}.jpg"), resized)
+                with self.lock:
+                    self.frames_written = idx + 1
+        except KeyboardInterrupt:
+            self.stopped = True
+
+    def _convert_frames(self, tid, nthreads):
+        """Converter thread: pick JPEGs assigned to this tid, convert to ASCII."""
+        while not self.stopped:
+            # Find the next unconverted frame this thread owns
+            idx = None
+            with self.lock:
+                start = self.frames_converted
+                end = self.frames_written
+                for i in range(start, end):
+                    if i % nthreads == tid and i not in self.queue:
+                        idx = i
+                        break
+                if idx is None and self.all_frames_read and start >= end:
+                    break
+
+            if idx is None:
+                time.sleep(0.005)
+                continue
+
+            path = os.path.join(self.temp_dir, f"f{idx}.jpg")
             try:
-                os.remove(f"frames/frame{i}.jpg")
-            except FileNotFoundError:
-                pass
-    except NameError:
-        print("DEBUG: Threads have not been started yet.")
-
-
-    print(f"\n{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Goodbye!{Colours.END}")
-    sys.exit()
-
-
-
-def render_frame():
-    global buffer, queue, inverted, global_width, global_height, image_buffer, rendered_images, stopped
-
-    try:
-        while not stopped:
-            _success, _image = vidcap.read()
-            if _success:
-                resize_image(_image)
-            elif not _success and not rendered_images:
-                rendered_images = True
-                for thread in range(3):
-                    render_frame_thread = Thread(target=render_frame_buffer, args=[thread])
-                    try:
-                        render_frame_thread.start()
-                    except KeyboardInterrupt:
-                        render_frame_thread.join()
-                        finished_render()
-            elif frames == total_frames:
-                os.remove("video")
-                print(f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Goodbye!{Colours.END}")
-                stopped = True
-    except KeyboardInterrupt:
-        finished_render()
-
-
-def resize_image(_image):
-    global buffer, queue, inverted, global_width, global_height, image_buffer
-    
-    cols, lines = shutil.get_terminal_size((80, 24))
-    
-    
-    max_w = cols // 2
-    max_h = max(lines - 12, 10)
-    
-    v_height, v_width = _image.shape[:2]
-    
-    scale_w = max_w / v_width
-    scale_h = max_h / v_height
-    scale = min(scale_w, scale_h)
-    
-    target_w = int(v_width * scale)
-    target_h = int(v_height * scale)
-    
-    target_w = max(target_w, 1)
-    target_h = max(target_h, 1)
-
-
-    resized_image = cv2.resize(_image, (target_w, target_h))
-    cv2.imwrite(f"frames/frame{image_buffer}.jpg", resized_image)
-    image_buffer += 1
-
-
-def render_frame_buffer(thread):
-    global image_buffer, buffer
-    for frame in range(image_buffer):
-        if frame % 3 == thread:
-            try:
-                _img = Image.open(f"frames/frame{frame}.jpg")
-
-                width, height = _img.size
-                pix = _img.load()
-
-                queue[frame] = "\n".join(get_full_frame(0, 0, height, width, [], pix))
-                os.remove(f"frames/frame{frame}.jpg")
-                buffer += 1
+                pil_img = Image.open(path).convert("RGB")
+                lines = convert_frame(pil_img, charset=self.charset,
+                                      video_mode=self.watching_video)
+                ascii_str = "\n".join(lines)
+                with self.lock:
+                    self.queue[idx] = ascii_str
+                    while self.frames_converted in self.queue:
+                        self.frames_converted += 1
+                os.remove(path)
             except Exception:
                 pass
 
+    def _play_loop(self):
+        """Playback thread: consume queue at the correct framerate.
+        Supports --loop (infinite or N repeats).
+        """
+        delay = 1.0 / (self.framerate * self.speed)
+        idx = 0
+        paused_frame = None
+        times_played = 0
+        max_plays = self.loop_count  # 0 = once, -1 = infinite, N = N times
+        all_cached = False
 
-def get_x_frame(x, y, height, width, outputs, pix):
-    if x == width - 2:
-        return outputs 
-    else:
-        if watching_video:
-            ascii_outputs = {50: ["  ", fg.white],
-                             70: ["..", fg.li_grey],
-                             130: ["--", fg.li_grey],
-                             230: ["~~", fg.grey],
-                             240: ["++", fg.da_black],
-                             255: ["  ", fg.black]}
-        else:
-            ascii_outputs = {
-                25: "  ", 
-                50: "..", 
-                75: "::", 
-                100: "--", 
-                125: "==", 
-                150: "++", 
-                175: "**", 
-                200: "##", 
-                225: "%%", 
-                255: "@@"
-            }
-        r, g, b = pix[x, y]
-        brightness = sum([r, g, b]) / 3
-        
-        thresholds = sorted(ascii_outputs.keys())
-        
-        for output in thresholds:
-            if brightness <= output:
-                if not watching_video:
-                    outputs.append(fg(r, g, b) + ascii_outputs[output] + fg.rs)
-                    return get_x_frame(x + 1, y, height, width, outputs, pix)
-                else:
-                    outputs.append(bg(r, g, b) + ascii_outputs[output][1] + ascii_outputs[output][0] + fg.rs + bg.rs)
-                    return get_x_frame(x + 1, y, height, width, outputs, pix)
+        while not self.stopped:
+            if self.controls.should_quit():
+                self.stopped = True
+                break
+
+            # --- Seek ---
+            seek = self.controls.consume_seek()
+            if seek != 0:
+                # seek is in seconds; convert to frames
+                seek_frames = int(seek * self.framerate) if self.framerate > 0 else int(seek * 30)
+                idx = max(0, min(idx + seek_frames, self.total_frames - 1))
+                with self.lock:
+                    for stale in range(idx):
+                        self.queue.pop(stale, None)
+
+            # --- Pause ---
+            if self.controls.is_paused():
+                if paused_frame is None:
+                    paused_frame = self._make_paused_frame()
+                print(f"\033[H{paused_frame}")
+                time.sleep(0.1)
+                continue
+            paused_frame = None
+
+            # --- Check end / loop ---
+            if idx >= self.total_frames:
+                times_played += 1
+                if max_plays == 0:
+                    break
+                if max_plays > 0 and times_played >= max_plays:
+                    break
+                # Reset for next loop
+                idx = 0
+                all_cached = True
+                self.begin_time = datetime.datetime.now()
+                self.frame_begin_time = datetime.datetime.now()
+                # Restart audio for new loop
+                stop_audio(self.audio_process)
+                self._start_audio()
+                continue
+
+            # --- Consume next frame ---
+            if not all_cached:
+                with self.lock:
+                    item = self.queue.pop(idx, None)
+                if item is None:
+                    time.sleep(0.001)
+                    continue
+            else:
+                item = self._all_ascii_frames[idx]
+
+            idx += 1
+
+            # --- Timing ---
+            elapsed = (datetime.datetime.now() - self.frame_begin_time).total_seconds()
+            remaining = delay - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+            self.frame_begin_time = datetime.datetime.now()
+
+            self._show_frame(item, idx)
+            self._all_ascii_frames.append(item)
+
+        self.stopped = True
+        self._finish()
 
 
-def get_full_frame(x, y, height, width, full_frame, pix):
-    if y == height - 2:
-        return full_frame
-    else:
-        x_frame = "".join(get_x_frame(0, y, height, width, [], pix))
-        full_frame.append(x_frame)
-        return get_full_frame(x, y + 1, height, width, full_frame, pix)
+    def _make_paused_frame(self):
+        """Return a paused overlay string."""
+        elapsed = datetime.datetime.now() - self.begin_time
+        return (
+            f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}"
+            f"Information about the video{Colours.END}\n"
+            f"{Colours.WARNING}{Colours.BOLD}"
+            f"PAUSED — press Space to resume, Q to quit{Colours.END}\n"
+            f"{Colours.GREEN}{Colours.BOLD}"
+            f"{elapsed}/{datetime.timedelta(seconds=self.duration)}{Colours.END}\n"
+            f"\n{Colours.WARNING}PAUSED{Colours.END}\n"
+        )
+
+    def _show_frame(self, item, num):
+        """Print one frame to the terminal with progress bar and control hints."""
+        elapsed = datetime.datetime.now() - self.begin_time
+
+        # Progress bar
+        pct = min(100, int(num / max(self.total_frames, 1) * 100))
+        bar_w = 20
+        filled = int(bar_w * pct / 100)
+        bar = "[" + "=" * filled + ">" * min(1, bar_w - filled) + "." * (bar_w - filled - 1) + "]"
+
+        info = (
+            f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}"
+            f"Video-to-ASCII{Colours.END}\n"
+            f"{Colours.GREEN}{Colours.BOLD}"
+            f"Frame {num}/{self.total_frames} "
+            f"({pct}%)  "
+            f"{elapsed}/{datetime.timedelta(seconds=self.duration)}"
+            f"{Colours.END}\n"
+            f"{Colours.CYAN}{bar}{Colours.END}\n"
+            f"{Colours.WARNING}"
+            f"[Space] pause  [Q] quit  [←/→] seek 5s{Colours.END}\n"
+            f"{item}\n"
+            f"Made by Atul Pahal"
+        )
+        # Check terminal resize each frame
+        self._check_terminal_size()
+        print(f"\033[H{info}")
+
+    _last_terminal_size = (0, 0)
+
+    def _check_terminal_size(self):
+        """Detect terminal resize and log if changed (recalc on next frame load)."""
+        cur = shutil.get_terminal_size((80, 24))
+        if cur != self._last_terminal_size:
+            self._last_terminal_size = cur
+
+    def _cleanup_owned(self):
+        """Remove the downloaded video file if we created it."""
+        if self._owned_video_path:
+            try:
+                os.remove(self._owned_video_path)
+            except FileNotFoundError:
+                pass
 
 
-def run_queue():
-    global queue, framerate, frames, frame_begin_time, begin_time, restart
-    start = False
-    lock = False
-    timer = False
-    checker_second = 0
-    local_image_buffer = 0
+    def _finish(self):
+        """Stop audio, stop controls listener, write HTML export, print goodbye."""
+        stop_audio(self.audio_process)
+        self.controls.stop()
 
-    while not stopped:
-        if len(queue) >= total_frames * buffer_amount - 1 and rendered_images:
-            start = True
+        # Write HTML export if requested
+        if self.export_html and self._all_ascii_frames:
+            try:
+                write_html(self._all_ascii_frames, self.framerate, self.export_html)
 
-        if frames == total_frames:
+                print(f"{Colours.GREEN}ASCII animation saved to {self.export_html}{Colours.END}")
+            except Exception as e:
+                print(f"{Colours.FAIL}Error saving HTML export: {e}{Colours.END}")
+
+        self._cleanup_owned()
+        print(f"\n{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Goodbye!{Colours.END}")
+
+    def run(self):
+        if not self.load_video():
             return
 
-        if (len(queue) >= total_frames * buffer_amount - 1 or start) and lock:
-            if not timer:
-                start = True
-                timer = True
+        # Detect audio player
+        self.audio_player = detect_player()
 
-                begin_time = datetime.datetime.now()
-                frame_begin_time = datetime.datetime.now()
+        # Start keyboard controls listener
+        self.controls.start()
 
-                render_second_thread = Thread(target=render_second)
-                render_second_thread.start()
-                
-                global audio_process
-                try:
-                    audio_process = subprocess.Popen(['afplay', 'video', '-q', '1'], 
-                                                   stdout=subprocess.DEVNULL, 
-                                                   stderr=subprocess.DEVNULL)
-                except Exception:
-                    pass
+        # Temp directory
+        self.temp_dir = tempfile.mkdtemp(prefix="ascii_frames_")
+        global _temp_dir
+        _temp_dir = self.temp_dir
 
-            checker = datetime.datetime.now() - begin_time
-            if round(checker.microseconds / 1000000, 1) == 0 and checker_second < checker.seconds:
-                restart = True
-                checker_second = checker.seconds
-        elif not start:
-            print(f"{Colours.GREEN}{Colours.BOLD}Buffering: {image_buffer}/{round(total_frames)}{Colours.END}")
-        elif not lock:
-            intro()
-            lock = True
+        # Start reader
+        self._reader = Thread(target=self._read_frames, daemon=True)
+        self._reader.start()
+
+        # Start converters
+        nconv = 3
+        for i in range(nconv):
+            t = Thread(target=self._convert_frames, args=(i, nconv), daemon=True)
+            t.start()
+            self._converters.append(t)
+
+        # --- Buffer phase ---
+        target = max(int(self.total_frames * self.args.buffer), 1)
+        if self.args.buffer > 0:
+            print(f"{Colours.GREEN}Pre-buffering up to {target} frames…{Colours.END}")
+
+        from intro import intro
+
+        while not self.stopped:
+            if self.args.buffer > 0 and self.frames_converted < target:
+                pct = int(self.frames_converted / max(self.total_frames, 1) * 100)
+                print(f"\r{Colours.GREEN}{Colours.BOLD}"
+                      f"Buffering: {self.frames_converted}/{self.total_frames} ({pct}%)"
+                      f"{Colours.END}",
+                      end="")
+                time.sleep(0.1)
+                continue
+
+            if not self.playback_started:
+                if self.no_intro:
+                    print("\033[2J\033[H", end="", flush=True)
+                else:
+                    intro()
+                self.playback_started = True
+
+                self._start_audio()
+                self.begin_time = datetime.datetime.now()
+                self.frame_begin_time = datetime.datetime.now()
+                self._player = Thread(target=self._play_loop, daemon=True)
+                self._player.start()
+
+            time.sleep(0.1)
+
+        # Join everything
+        self._reader.join()
+        for t in self._converters:
+            t.join()
+        if self._player and self._player.is_alive():
+            self._player.join()
+    def _start_audio(self):
+        """Launch audio playback using the cross-platform audio module."""
+        if self.no_audio:
+            return
+        if not self.audio_path or not os.path.isfile(self.audio_path):
+            return
+        if not self.audio_player:
+            return
+        self.audio_process = play_audio(self.audio_path, self.audio_player)
 
 
-def render_second():
-    global queue, framerate, frames, frame_begin_time, begin_time, restart, stopped
-    time_delay = (duration / total_frames)
-    render_frames = 0
-    while not stopped:
-        if restart:
-            not_rendered = framerate - (render_frames % framerate)
-            if framerate > not_rendered > 0:
-                for _ in range(not_rendered):
-                    try:
-                        queue.pop(frames)
-                        frames += 1
-                    except IndexError:
-                        print(f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Goodbye!{Colours.END}")
-                        finished_render()
-            render_frames = 0
-            restart = False
-            pass
-        else:
-            try:
-                if render_frames < framerate:
-                    item = queue.pop(frames)
-                    frames += 1
-                    render_frames += 1
+def main():
+    args = parse_args()
+    if args.version:
+        print(f"video-to-ascii v{__version__}")
+        sys.exit(0)
 
-                    sleep = time_delay - ((datetime.datetime.now() - frame_begin_time).microseconds / 1000000)
-                    if sleep > 0:
-                        time.sleep(sleep)
-                    frame_begin_time = datetime.datetime.now()
-                    display_frame(item)
-            except KeyError:
-                print(f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Goodbye!{Colours.END}")
-                stopped = True
-                finished_render()
+    # Handle --list-charsets
+    if args.list_charsets:
+        print("Available character sets:")
+        for name, desc in list_charsets().items():
+            print(f"  {name}  — {desc}")
+        sys.exit(0)
 
+    # vid is required unless --list-charsets was used
+    if not args.vid:
+        print(f"{Colours.FAIL}Error: a video URL or file path is required{Colours.END}")
+        print("Usage: uv run python3 video_render.py <video-url-or-path> [options]")
+        sys.exit(1)
 
-def display_frame(item):
-    output = f"{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Information about the video{Colours.END}" \
-             f"\n{Colours.WARNING}{Colours.BOLD}Tabbing out may crash this, stopping the program is a bit buggy, may need to spam ctrl c till it stops.{Colours.END}" \
-             f"\n{Colours.GREEN}{Colours.BOLD}Is running in video mode? {watching_video}" \
-             f"\n{Colours.GREEN}{Colours.BOLD}Frame {frames}/{buffer} at {framerate}fps ({total_frames} frames in total){Colours.END}" \
-             f"\n{Colours.GREEN}{Colours.BOLD}{(datetime.datetime.now() - begin_time)}/{datetime.timedelta(seconds=duration)}{Colours.END}" \
-             f"\n{item}" \
-             f"\nMade by Atul Pahal"
-    print(f"\033[H{output}")
+    # Validate charset
+    available = list_charsets()
+    if args.chars not in available:
+        print(f"{Colours.FAIL}Error: unknown charset '{args.chars}'. "
+              f"Available: {', '.join(available)}{Colours.END}")
+        sys.exit(1)
 
+    atexit.register(cleanup)
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+
+    player = None
+    try:
+        cursor.hide()
+        player = ASCIIVideoPlayer(args)
+        player.run()
+    except KeyboardInterrupt:
+        if player:
+            player.stopped = True
+    finally:
+        cleanup()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("vid", help="Where the video is located", type=str)
-    parser.add_argument("--framerate", dest="framerate", help="Frame rate (Default 30)", type=int, default=30)
-    parser.add_argument("--buffer", dest="buffer", help="Buffer amount 0-1", type=float, default=0)
-    parser.add_argument("--video_mode", dest="video_mode",
-                        help="Changes the rendering mode from character to highlighted", type=str, default="False")
-    args = parser.parse_args()
-
-    try:
-        os.remove("video")
-    except FileNotFoundError:
-        print("DEBUG: No previous video found.")
-
-    try:
-        if re.match('^(http(s)??\:\/\/)?(www\.)?((youtube\.com\/watch\?v=)|(youtu.be\/))([a-zA-Z0-9\-_]){11}',
-                    args.vid.lower()):
-            video_location, framerate, total_frames, duration = ydls.save_file(args.vid)
-            vidcap = cv2.VideoCapture(video_location)
-            success, image = vidcap.read()
-
-            begin_time = datetime.datetime.now()
-            frame_begin_time = datetime.datetime.now()
-
-            restart = False
-            rendered_images = False
-            watching_video = True if args.video_mode.lower() == "true" else False
-            stopped = False
-
-            frames = 1
-            popped = 1
-            image_buffer = 0
-            buffer = 0
-            buffer_amount = args.buffer
-
-            queue = {}
-            cv2.imwrite(f"frames/frameTEST.jpg", image)
-            img = Image.open(f"frames/frameTEST.jpg")
-            global_width, global_height = img.size
-
-            queue_thread = Thread(target=run_queue)
-            render_thread = Thread(target=render_frame)
-        else:
-            finished_render()
-            raise VideoNotYoutubeLink(args.vid)
-
-        try:
-            cursor.hide()
-
-            try:
-                render_thread.start()
-            except KeyboardInterrupt:
-                render_thread.join()
-                finished_render()
-
-            try:
-                queue_thread.start()
-            except KeyboardInterrupt:
-                queue_thread.join()
-                finished_render()
-        except KeyboardInterrupt:
-            finished_render()
-    except ValueError:
-        finished_render()
+    main()

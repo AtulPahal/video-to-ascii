@@ -3,5 +3,6 @@ opencv-python
 sty
 cursor
 pillow
-regex
-PyInquirer
+mss
+pynput
+questionary

@@ -1,111 +1,214 @@
+"""
+Interactive CLI launcher for video-to-ascii.
+Prompts the user for mode, URL, buffer, and display settings,
+then runs the appropriate renderer.
+"""
+
 from __future__ import print_function, unicode_literals
 
 import os
+import re
 import subprocess
 import sys
 
-import regex
-from PyInquirer import prompt, Validator, ValidationError
-
 from colours import Colours
+try:
+    import questionary
+    from questionary import ValidationError, Validator
+except ImportError:
+    print(f"{Colours.FAIL}Missing dependency: questionary. Install with: uv pip install questionary{Colours.END}")
+    sys.exit(1)
+
+from ascii_convert import list_charsets
 
 
-class UrlValidator(Validator):
+# ---------------------------------------------------------------------------
+# Validators
+# ---------------------------------------------------------------------------
+
+class URLValidator(Validator):
     def validate(self, document):
-        is_valid = regex.match(
-            '^(http(s)??\:\/\/)?(www\.)?((youtube\.com\/watch\?v=)|(youtu.be\/))([a-zA-Z0-9\-_]){11}', document.text)
+        text = document.text.strip()
+        is_valid = re.match(
+            r'^(http(s)?://)?(www\.)?((youtube\.com/watch\?v=)|(youtu\.be/))([a-zA-Z0-9_-]{11})',
+            text
+        )
         if not is_valid:
             raise ValidationError(
-                message='Please enter a correct url (must be in form https://youtube.com/watch?v=VIDEO_ID)',
-                cursor_position=len(document.text))
+                message="Please enter a valid YouTube URL "
+                        "(e.g. https://youtube.com/watch?v=VIDEO_ID)",
+                cursor_position=len(document.text),
+            )
+
+
+class FileValidator(Validator):
+    def validate(self, document):
+        path = document.text.strip()
+        if not os.path.isfile(path):
+            raise ValidationError(
+                message=f"File not found: {path}",
+                cursor_position=len(document.text),
+            )
 
 
 class BufferValidator(Validator):
     def validate(self, document):
         try:
-            if not 0 <= float(document.text) <= 1:
+            val = float(document.text.strip())
+            if not 0 <= val <= 1:
                 raise ValidationError(
-                    message='Buffer amount must be between 0 and 1',
-                    cursor_position=len(document.text))
+                    message="Buffer amount must be between 0 and 1",
+                    cursor_position=len(document.text),
+                )
         except ValueError:
             raise ValidationError(
-                message='Buffer amount must be between 0 and 1',
-                cursor_position=len(document.text))
+                message="Buffer amount must be a number between 0 and 1",
+                cursor_position=len(document.text),
+            )
 
 
-question1 = [
-    {
-        'type': 'list',
-        'name': 'type',
-        'message': 'What do you want to do?',
-        'choices': [
-            'Video, this will render a youtube video.',
-            'Screen, this will render your screen (screen 0) live; there is a little bit of lag and quality is reduced.'
-        ]
-    }
-]
+# ---------------------------------------------------------------------------
+# Build command
+# ---------------------------------------------------------------------------
 
-answers = prompt(question1)
-if answers['type'].lower().startswith("video"):
-    question2 = [
-        {
-            'type': 'input',
-            'name': 'url',
-            'message': 'What\'s the url?',
-            'validate': UrlValidator
-        },
-        {
-            'type': 'input',
-            'name': 'buffer',
-            'message': 'How much do you want to buffer (0-1)?',
-            'validate': BufferValidator,
-            'default': '0'
-        },
-        {
-            'type': 'list',
-            'name': 'video_mode',
-            'message': 'Do you want to run this in video mode (Video mode means the characters are highlighted instead of coloured, this makes colours more vibrant)?',
-            'choices': [
-                'Yes',
-                'No'
-            ]
-        }
-    ]
+def build_command():
+    answers = questionary.select(
+        "What do you want to do?",
+        choices=[
+            "Video — render a YouTube video or local file",
+            "Screen — capture and render your screen live (laggy, lower quality)",
+        ],
+    ).ask()
 
-    answers = prompt(question2)
-    command = f"python3 video_render.py {answers['url']} --buffer={answers['buffer']} --video_mode={True if answers['video_mode'] == 'Yes' else False}"
-else:
-    command = f"python3 live_render.py"
+    if answers is None:
+        sys.exit(0)
 
-print(f"\n\n-----------------------------------"
-      f"\n{Colours.FAIL}{Colours.BOLD}PLEASE READ{Colours.END}")
-print(f"The following program can lag or crash your computer, it is not designed for all computers. "
-      f"If you experience any issues with your computer as a result of this program it is your fault, only run "
-      f"this program if you know your pc will handle it. To end the program press CTRL + C. If this doesn't stop it "
-      f"you may need to press it a couple times or send a kill signal with task manager."
-      f"\n\n{Colours.FAIL}{Colours.BOLD}RUN THIS AT YOUR OWN RISK.{Colours.END}"
-      f"\n\n{Colours.GREEN}Also you can use right shift to change the mode of the renderer!{Colours.END}"
-      f"\n-----------------------------------\n\n")
-question2 = [
-    {
-        'type': 'confirm',
-        'name': 'warning',
-        'message': 'By confirming this you are agreeing that you have read and agree to the statement above'
-    }
-]
-if not prompt(question2)['warning']:
-    print("Cannot run program as you did not agree")
-    sys.exit()
-
-try:
-    print(f"Running {command}")
-    os.system(command)
-except Exception as e:
-    print(e)
-    if isinstance(e, KeyError):
-        sys.exit()
-    elif isinstance(e, subprocess.CalledProcessError):
-        print("Goodbye!")
+    if answers.startswith("Video"):
+        return _build_video_command()
     else:
-        print(f"Unhandled Error: {e}"
-              f"\nThis could be because you don't have python installed!")
+        return ["uv", "run", "python3", "live_render.py"]
+
+
+def _build_video_command():
+    # Source
+    source = questionary.select(
+        "Where is the video?",
+        choices=["YouTube URL", "Local file"],
+    ).ask()
+    if source is None:
+        sys.exit(0)
+
+    vid_arg = ""
+    if source == "YouTube URL":
+        url = questionary.text(
+            "What's the YouTube URL?",
+            validate=URLValidator,
+        ).ask()
+        if url is None:
+            sys.exit(0)
+        vid_arg = url.strip()
+    else:
+        path = questionary.text(
+            "Path to the video file:",
+            validate=FileValidator,
+        ).ask()
+        if path is None:
+            sys.exit(0)
+        vid_arg = path.strip()
+
+    # Buffer
+    buffer_val = questionary.text(
+        "How much to pre-buffer (0-1, 0 = minimal):",
+        validate=BufferValidator,
+        default="0",
+    ).ask()
+    if buffer_val is None:
+        sys.exit(0)
+
+    # Video mode
+    video_mode = questionary.confirm(
+        "Use video mode? (background-coloured blocks, more vibrant)",
+        default=False,
+    ).ask()
+    if video_mode is None:
+        sys.exit(0)
+
+    # Character set (only in non-video mode)
+    if not video_mode:
+        charsets = list_charsets()
+        charset = questionary.select(
+            "Character set:",
+            choices=[f"{k} — {v}" for k, v in charsets.items()],
+            default="standard",
+        ).ask()
+        if charset is None:
+            sys.exit(0)
+        charset_name = charset.split(" —")[0]
+    else:
+        charset_name = "standard"  # unused in video mode
+
+    cmd_parts = ["uv", "run", "python3", "video_render.py", vid_arg]
+    cmd_parts.append(f"--buffer={float(buffer_val.strip())}")
+    if video_mode:
+        cmd_parts.append("--video-mode")
+    if charset_name != "standard":
+        cmd_parts.append(f"--chars={charset_name}")
+
+    return cmd_parts
+
+
+# ---------------------------------------------------------------------------
+# Warning prompt
+# ---------------------------------------------------------------------------
+
+def show_warning():
+    print()
+    print("-" * 40)
+    print(f"{Colours.FAIL}{Colours.BOLD}PLEASE READ{Colours.END}")
+    print(
+        "The following program can lag or crash your computer. "
+        "It is not designed for all computers. If you experience "
+        "any issues with your computer as a result of this program "
+        "it is your fault. Only run this program if you know your "
+        "PC will handle it. To end the program press Ctrl+C (may "
+        "need to press it a couple times)."
+    )
+    print()
+    print(f"{Colours.FAIL}{Colours.BOLD}RUN AT YOUR OWN RISK.{Colours.END}")
+    print()
+    print(f"{Colours.GREEN}Tip: press Right Shift to toggle video "
+          f"mode during playback!{Colours.END}")
+    print("-" * 40)
+    print()
+
+    agree = questionary.confirm(
+        "I have read and agree to the statement above",
+        default=False,
+    ).ask()
+
+    if not agree:
+        print("Cannot run program — you did not agree.")
+        sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    try:
+        argv = build_command()
+        show_warning()
+
+        print(f"\n{Colours.GREEN}Running: {' '.join(argv)}{Colours.END}\n")
+        subprocess.run(argv)
+
+    except KeyboardInterrupt:
+        print(f"\n{Colours.FAIL}Cancelled.{Colours.END}")
+        sys.exit(0)
+    except Exception as e:
+        print(f"{Colours.FAIL}Error: {e}{Colours.END}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
