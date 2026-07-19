@@ -19,6 +19,7 @@ _ANSI_RE = re.compile(r'\x1b\[([\d;]*)m')
 
 def xterm_256_to_rgb(idx):
     """Convert xterm 256-color index to RGB tuple."""
+    idx = max(0, min(255, idx))
     if idx < 16:
         colors = [
             (0,0,0), (128,0,0), (0,128,0), (128,128,0), (0,0,128), (128,0,128), (0,128,128), (192,192,192),
@@ -174,7 +175,7 @@ def _build_html(frames, fps):
         )
 
     frames_joined = "\n".join(frame_divs)
-    delay_ms = int(1000 / fps)
+    delay_ms = int(1000 / fps) if fps > 0 else 100
 
     return f"""<!DOCTYPE html>
 <html lang="en">

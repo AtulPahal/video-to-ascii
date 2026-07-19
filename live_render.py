@@ -97,72 +97,76 @@ def render_image_thread(tid):
     global fps_counter, image_buffer, reset
 
     sct = mss.mss()
+    try:
+        framerate = args.framerate if (args and hasattr(args, "framerate")) else 30
+        scale = args.scale if (args and hasattr(args, "scale")) else None
+        contrast = args.contrast if (args and hasattr(args, "contrast")) else 1.0
+        brightness = args.brightness if (args and hasattr(args, "brightness")) else 1.0
+        dither = args.dither if (args and hasattr(args, "dither")) else "none"
 
-    framerate = args.framerate if (args and hasattr(args, "framerate")) else 30
-    scale = args.scale if (args and hasattr(args, "scale")) else None
-    contrast = args.contrast if (args and hasattr(args, "contrast")) else 1.0
-    brightness = args.brightness if (args and hasattr(args, "brightness")) else 1.0
-    dither = args.dither if (args and hasattr(args, "dither")) else "none"
+        while True:
+            with _timing_lock:
+                if stopped:
+                    break
+                curr_reset = reset
+                if reset:
+                    reset = False
+                curr_last_second = last_second
+                curr_has_started = has_started
 
-    while True:
-        with _timing_lock:
-            if stopped:
-                break
-            curr_reset = reset
-            if reset:
-                reset = False
-            curr_last_second = last_second
-            curr_has_started = has_started
+            if curr_has_started and curr_last_second > 0:
+                desired = framerate * (curr_last_second + 1)
+                with _counter_lock:
+                    ib = image_buffer
+                if ib >= desired:
+                    time.sleep(0.005)
+                    continue
 
-        if curr_has_started and curr_last_second > 0:
-            desired = framerate * (curr_last_second + 1)
-            with _counter_lock:
-                ib = image_buffer
-            if ib >= desired:
-                time.sleep(0.005)
-                continue
-
-        # Get target dimensions
-        if scale is not None:
-            height = max(MONITOR["height"] // scale, 1)
-            width = max(MONITOR["width"] // scale, 1)
-        else:
-            cols, lines = shutil.get_terminal_size((80, 24))
-            max_w = max(1, (cols - 2) // 2)
-            max_h = max(1, lines - 4)
-            aspect_ratio = MONITOR["width"] / MONITOR["height"]
-            
-            w1 = max_w
-            h1 = int(w1 / aspect_ratio)
-            if h1 <= max_h:
-                width = w1
-                height = max(1, h1)
+            # Get target dimensions
+            if scale is not None:
+                height = max(MONITOR["height"] // scale, 1)
+                width = max(MONITOR["width"] // scale, 1)
             else:
-                height = max_h
-                width = max(1, int(height * aspect_ratio))
+                cols, lines = shutil.get_terminal_size((80, 24))
+                max_w = max(1, (cols - 2) // 2)
+                max_h = max(1, lines - 4)
+                aspect_ratio = MONITOR["width"] / MONITOR["height"]
+                
+                w1 = max_w
+                h1 = int(w1 / aspect_ratio)
+                if h1 <= max_h:
+                    width = w1
+                    height = max(1, h1)
+                else:
+                    height = max_h
+                    width = max(1, int(height * aspect_ratio))
 
-        # Grab and resize
-        sct_img = sct.grab(MONITOR)
-        img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-        
-        if hasattr(Image, "Resampling"):
-            resample_filter = Image.Resampling.LANCZOS
-        else:
-            resample_filter = Image.ANTIALIAS
+            # Grab and resize
+            try:
+                sct_img = sct.grab(MONITOR)
+            except Exception:
+                time.sleep(0.05)
+                continue
+            img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
             
-            
-        img = img.resize((width, height), resample_filter)
+            if hasattr(Image, "Resampling"):
+                resample_filter = Image.Resampling.LANCZOS
+            else:
+                resample_filter = Image.ANTIALIAS
+                
+                
+            img = img.resize((width, height), resample_filter)
 
-        with _watching_video_lock:
-            vm = watching_video
-        ascii_lines = convert_frame(img, video_mode=vm, contrast=contrast, brightness=brightness, dither=dither)
-        display_frame("\n".join(ascii_lines), tid)
+            with _watching_video_lock:
+                vm = watching_video
+            ascii_lines = convert_frame(img, video_mode=vm, contrast=contrast, brightness=brightness, dither=dither)
+            display_frame("\n".join(ascii_lines), tid)
 
-        with _counter_lock:
-            fps_counter += 1
-            image_buffer += 1
-
-    sct.close()
+            with _counter_lock:
+                fps_counter += 1
+                image_buffer += 1
+    finally:
+        sct.close()
 
 
 def display_frame(item, tid):
@@ -285,11 +289,19 @@ def main():
     MONITOR = monitor_info
 
     # Start keyboard listener
-    listener = keyboard.Listener(on_press=input_checker)
-    listener.start()
+    listener = None
+    try:
+        listener = keyboard.Listener(on_press=input_checker)
+        listener.start()
+    except Exception as e:
+        print(f"{Colours.WARNING}Warning: Could not start keyboard listener. "
+              f"Keyboard shortcuts will be disabled. (Error: {e}){Colours.END}")
 
     # Start capture threads
     num_threads = args.threads
+    if num_threads < 1:
+        print("Error: --threads must be at least 1", file=sys.stderr)
+        sys.exit(1)
     threads = []
     for i in range(num_threads):
         t = Thread(target=render_image_thread, args=[i])
@@ -308,7 +320,11 @@ def main():
         cursor.show()
         for t in threads:
             t.join()
-        listener.stop()
+        if listener:
+            try:
+                listener.stop()
+            except Exception:
+                pass
         print(f"\n{Colours.FAIL}{Colours.BOLD}Stopped.{Colours.END}")
 
 if __name__ == "__main__":

@@ -102,7 +102,10 @@ def parse_args():
 
 def cleanup():
     """Restore cursor visibility on exit."""
-    cursor.show()
+    try:
+        cursor.show()
+    except BrokenPipeError:
+        pass
 
 
 def _signal_handler(signum, frame):
@@ -118,7 +121,7 @@ class ASCIIVideoPlayer:
         self.watching_video = args.video_mode
         self.charset = args.chars
         self.no_audio = args.no_audio
-        self.speed = args.speed
+        self.speed = args.speed if args.speed > 0 else 1.0
         self.loop_count = args.loop
         self.no_intro = args.no_intro
         self.override_w = args.width
@@ -134,7 +137,8 @@ class ASCIIVideoPlayer:
 
         self.export_html = args.export_html
         self._all_ascii_frames = []       # accumulated for loop cache / HTML export
-
+        self.seek_request_frame = None
+        self.terminal_resized = False
         # Threading state
         self.stopped = False
         self.frames_written = 0     # frames saved as JPEG
@@ -160,6 +164,30 @@ class ASCIIVideoPlayer:
         self._converters = []
         self._player = None
 
+    def _start_processing_threads(self, start_frame=0):
+        """Recreate and start reader and converter threads starting at start_frame."""
+        with self.lock:
+            if self._reader and self._reader.is_alive():
+                return
+            self.all_frames_read = False
+            self.frames_written = start_frame
+            self.stopped = False
+            if self.video_cap:
+                self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            # Flush the queue
+            while not self.frame_queue.empty():
+                try:
+                    self.frame_queue.get_nowait()
+                except queue.Empty:
+                    break
+            self._reader = Thread(target=self._read_frames, daemon=True)
+            self._reader.start()
+            self._converters = []
+            nconv = 3
+            for i in range(nconv):
+                t = Thread(target=self._convert_frames, args=(i, nconv), daemon=True)
+                t.start()
+                self._converters.append(t)
     # ------------------------------------------------------------------
     # Video loading
     # ------------------------------------------------------------------
@@ -175,6 +203,8 @@ class ASCIIVideoPlayer:
                 print(f"{Colours.FAIL}Error: cannot open video file '{vid}'{Colours.END}")
                 return False
             self.framerate = cap.get(cv2.CAP_PROP_FPS) or float(self.args.framerate)
+            if self.framerate <= 0:
+                self.framerate = 30.0
             self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             self.duration = self.total_frames / self.framerate if self.framerate > 0 else 0
             cap.release()
@@ -201,9 +231,11 @@ class ASCIIVideoPlayer:
         )
         if video_location == "error":
             return False
-        self.audio_path = temp_download
-        self._owned_video_path = temp_download
-        self.video_cap = cv2.VideoCapture(temp_download)
+        if self.framerate <= 0:
+            self.framerate = 30.0
+        self.audio_path = video_location
+        self._owned_video_path = video_location
+        self.video_cap = cv2.VideoCapture(video_location)
         return True
 
     # ------------------------------------------------------------------
@@ -241,13 +273,28 @@ class ASCIIVideoPlayer:
         return res
     # ------------------------------------------------------------------
     # Thread targets
-    # ------------------------------------------------------------------
-
     def _read_frames(self):
         """Reader thread: read video -> resize -> enqueue for conversion."""
         try:
             render_size = None
             while not self.stopped:
+                with self.lock:
+                    if self.terminal_resized:
+                        self.terminal_resized = False
+                        render_size = None
+                    if self.seek_request_frame is not None:
+                        target = self.seek_request_frame
+                        self.seek_request_frame = None
+                        if self.video_cap:
+                            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+                        self.frames_written = target
+                        # Flush the queue
+                        while not self.frame_queue.empty():
+                            try:
+                                self.frame_queue.get_nowait()
+                            except queue.Empty:
+                                break
+
                 ok, frame = self.video_cap.read()
                 if not ok:
                     with self.lock:
@@ -261,7 +308,18 @@ class ASCIIVideoPlayer:
                 with self.lock:
                     idx = self.frames_written
                     self.frames_written = idx + 1
-                self.frame_queue.put((idx, resized))
+
+                # Retry loop for putting frame into queue
+                placed = False
+                while not self.stopped and not placed:
+                    with self.lock:
+                        if self.seek_request_frame is not None:
+                            break
+                    try:
+                        self.frame_queue.put((idx, resized), timeout=0.1)
+                        placed = True
+                    except queue.Full:
+                        pass
         except KeyboardInterrupt:
             self.stopped = True
 
@@ -276,6 +334,11 @@ class ASCIIVideoPlayer:
                         break
                 continue
 
+            # Skip conversion if already converted
+            with self.lock:
+                if idx < len(self._all_ascii_frames) and self._all_ascii_frames[idx] is not None:
+                    continue
+
             try:
                 pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 lines = convert_frame(pil_img, charset=self.charset,
@@ -286,11 +349,19 @@ class ASCIIVideoPlayer:
                 ascii_str = "\n".join(lines)
                 with self.lock:
                     self.queue[idx] = ascii_str
-                    while self.frames_converted in self.queue:
+                    if idx >= len(self._all_ascii_frames):
+                        self._all_ascii_frames.extend([None] * (idx + 1 - len(self._all_ascii_frames)))
+                    self._all_ascii_frames[idx] = ascii_str
+                    while self.frames_converted < len(self._all_ascii_frames) and self._all_ascii_frames[self.frames_converted] is not None:
                         self.frames_converted += 1
             except Exception as e:
                 if not self.stopped:
                     print(f"{Colours.FAIL}Error converting frame {idx}: {e}{Colours.END}", file=sys.stderr)
+                with self.lock:
+                    self.queue[idx] = ""
+                    if idx >= len(self._all_ascii_frames):
+                        self._all_ascii_frames.extend([None] * (idx + 1 - len(self._all_ascii_frames)))
+                    self._all_ascii_frames[idx] = ""
     def _play_loop(self):
         """Playback thread: consume queue at the correct framerate.
         Supports --loop (infinite or N repeats).
@@ -314,10 +385,23 @@ class ASCIIVideoPlayer:
                     # seek is in seconds; convert to frames
                     seek_frames = int(seek * self.framerate) if self.framerate > 0 else int(seek * 30)
                     idx = max(0, min(idx + seek_frames, self.total_frames - 1))
-                    if not all_cached:
+                    with self.lock:
+                        for stale in range(idx):
+                            self.queue.pop(stale, None)
+
+                    item_ready = False
+                    if idx < len(self._all_ascii_frames):
                         with self.lock:
-                            for stale in range(idx):
-                                self.queue.pop(stale, None)
+                            item_ready = (self._all_ascii_frames[idx] is not None)
+
+                    if not item_ready:
+                        with self.lock:
+                            reader_alive = (self._reader and self._reader.is_alive())
+                        if reader_alive:
+                            with self.lock:
+                                self.seek_request_frame = idx
+                        else:
+                            self._start_processing_threads(start_frame=idx)
                     
                     # Seek the audio by stopping and restarting at the new timestamp
                     stop_audio(self.audio_process)
@@ -372,13 +456,10 @@ class ASCIIVideoPlayer:
                 elapsed_seconds = (now - self.begin_time).total_seconds()
                 target_idx = int(elapsed_seconds * self.framerate * self.speed)
                 if target_idx > idx:
-                    if all_cached:
-                        idx = min(target_idx, self.total_frames - 1)
-                    else:
-                        with self.lock:
-                            for stale_idx in range(idx, min(target_idx, self.total_frames)):
-                                self.queue.pop(stale_idx, None)
-                        idx = min(target_idx, self.total_frames)
+                    with self.lock:
+                        for stale_idx in range(idx, min(target_idx, self.total_frames)):
+                            self.queue.pop(stale_idx, None)
+                    idx = min(target_idx, self.total_frames)
 
                 # --- Check end / loop ---
                 if idx >= self.total_frames:
@@ -389,7 +470,7 @@ class ASCIIVideoPlayer:
                         break
                     # Reset for next loop
                     idx = 0
-                    all_cached = True
+                    all_cached = all(f is not None for f in self._all_ascii_frames)
                     self.begin_time = datetime.datetime.now()
                     self.frame_begin_time = datetime.datetime.now()
                     pause_start = None
@@ -397,17 +478,28 @@ class ASCIIVideoPlayer:
                     stop_audio(self.audio_process)
                     self._start_audio()
                     audio_was_paused = False
+                    if not all_cached:
+                        self._start_processing_threads(start_frame=0)
                     continue
 
                 # --- Consume next frame ---
-                if not all_cached:
+                item = None
+                with self.lock:
+                    if idx in self.queue:
+                        item = self.queue.pop(idx)
+                        if idx < len(self._all_ascii_frames) and self._all_ascii_frames[idx] is None:
+                            self._all_ascii_frames[idx] = item
+                    elif idx < len(self._all_ascii_frames):
+                        item = self._all_ascii_frames[idx]
+
+                if item is None:
+                    # Restart processing threads if they died and frame is missing
                     with self.lock:
-                        item = self.queue.pop(idx, None)
-                    if item is None:
-                        time.sleep(0.001)
-                        continue
-                else:
-                    item = self._all_ascii_frames[idx]
+                        reader_alive = (self._reader and self._reader.is_alive())
+                    if not reader_alive and idx < self.total_frames:
+                        self._start_processing_threads(start_frame=idx)
+                    time.sleep(0.001)
+                    continue
 
                 idx += 1
                 self._last_shown_item = item
@@ -423,8 +515,6 @@ class ASCIIVideoPlayer:
                 self.frame_begin_time = now
 
                 self._show_frame(item, idx, now)
-                if not all_cached:
-                    self._all_ascii_frames.append(item)
         finally:
             self.stopped = True
             self._finish()
@@ -439,7 +529,7 @@ class ASCIIVideoPlayer:
         cols, lines = shutil.get_terminal_size((80, 24))
 
         # Check terminal resize each frame
-        self._check_terminal_size()
+        self._check_terminal_size(current_idx=max(0, num - 1))
 
         # Parse video dimensions and calculate margins
         video_lines = item.splitlines()
@@ -541,15 +631,23 @@ class ASCIIVideoPlayer:
         dashboard.append(keys_line)
         dashboard.append(bottom_line)
 
-        print(f"\033[H" + "\n".join(dashboard), end="", flush=True)
+        try:
+            print(f"\033[H" + "\n".join(dashboard), end="", flush=True)
+        except BrokenPipeError:
+            self.stopped = True
 
-    def _check_terminal_size(self):
+    def _check_terminal_size(self, current_idx=0):
         """Detect terminal resize and log if changed (recalc on next frame load)."""
         cur = shutil.get_terminal_size((80, 24))
         if cur != self._last_terminal_size:
             self._last_terminal_size = cur
             # Clear terminal completely to avoid residual layout artifacts on resize
             print("\033[2J\033[H", end="", flush=True)
+            with self.lock:
+                self.terminal_resized = True
+                self._all_ascii_frames = [None] * self.total_frames
+                self.frames_converted = current_idx
+                self.seek_request_frame = current_idx
 
     def _cleanup_owned(self):
         """Remove the downloaded video file and its parent temp directory."""
@@ -568,21 +666,43 @@ class ASCIIVideoPlayer:
         stop_audio(self.audio_process)
         self.controls.stop()
 
+        # Release VideoCapture resources
+        if self.video_cap:
+            try:
+                self.video_cap.release()
+            except Exception:
+                pass
+
         # Write HTML export if requested
         if self.export_html and self._all_ascii_frames:
             try:
-                write_html(self._all_ascii_frames, self.framerate, self.export_html)
-
-                print(f"{Colours.GREEN}ASCII animation saved to {self.export_html}{Colours.END}")
+                valid_frames = [f for f in self._all_ascii_frames if f is not None]
+                if valid_frames:
+                    write_html(valid_frames, self.framerate, self.export_html)
+                    print(f"{Colours.GREEN}ASCII animation saved to {self.export_html}{Colours.END}")
+                else:
+                    print(f"{Colours.WARNING}No frames converted for HTML export{Colours.END}")
             except Exception as e:
                 print(f"{Colours.FAIL}Error saving HTML export: {e}{Colours.END}")
 
+        # Flush the frame queue to unblock reader/converters if blocked
+        while not self.frame_queue.empty():
+            try:
+                self.frame_queue.get_nowait()
+            except queue.Empty:
+                break
+
         self._cleanup_owned()
-        print(f"\n{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Goodbye!{Colours.END}")
+        try:
+            print(f"\n{Colours.FAIL}{Colours.BOLD}{Colours.UNDERLINE}Goodbye!{Colours.END}")
+        except BrokenPipeError:
+            pass
 
     def run(self):
         if not self.load_video():
-            return
+            return False
+        # Pre-allocate frames cache list
+        self._all_ascii_frames = [None] * self.total_frames
 
         # Detect audio player
         self.audio_player = detect_player()
@@ -590,26 +710,20 @@ class ASCIIVideoPlayer:
         # Start keyboard controls listener
         self.controls.start()
 
-
-        # Start reader
-        self._reader = Thread(target=self._read_frames, daemon=True)
-        self._reader.start()
-
-        # Start converters
-        nconv = 3
-        for i in range(nconv):
-            t = Thread(target=self._convert_frames, args=(i, nconv), daemon=True)
-            t.start()
-            self._converters.append(t)
+        # Start reader & converter threads
+        self._start_processing_threads(start_frame=0)
 
         # --- Buffer phase ---
         target = max(int(self.total_frames * self.args.buffer), 1)
         if self.args.buffer > 0:
             print(f"{Colours.GREEN}Pre-buffering up to {target} frames…{Colours.END}")
 
-
         while not self.stopped:
             if self.args.buffer > 0 and self.frames_converted < target:
+                with self.lock:
+                    all_done = self.all_frames_read and self.frame_queue.empty()
+                if all_done:
+                    break
                 pct = int(self.frames_converted / max(self.total_frames, 1) * 100)
                 print(f"\r{Colours.GREEN}{Colours.BOLD}"
                       f"Buffering: {self.frames_converted}/{self.total_frames} ({pct}%)"
@@ -634,12 +748,13 @@ class ASCIIVideoPlayer:
             time.sleep(0.1)
 
         # Join everything
-        self._reader.join()
+        if self._reader:
+            self._reader.join()
         for t in self._converters:
             t.join()
         if self._player and self._player.is_alive():
             self._player.join()
-
+        return True
     def _start_audio(self):
         """Launch audio playback using the cross-platform audio module."""
         if self.no_audio:
@@ -685,7 +800,11 @@ def main():
     try:
         cursor.hide()
         player = ASCIIVideoPlayer(args)
-        player.run()
+        if not player.run():
+            sys.exit(1)
+    except VideoNotYoutubeLink as e:
+        print(f"{Colours.FAIL}Error: {e.message} — {e.video_link}{Colours.END}")
+        sys.exit(1)
     except KeyboardInterrupt:
         if player:
             player.stopped = True

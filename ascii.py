@@ -141,6 +141,8 @@ def _build_video_command():
         choices=["YouTube URL", "Local file"],
         style=style,
     ).ask()
+    if source is None:
+        sys.exit(0)
 
     vid_arg = ""
     if source == "YouTube URL":
@@ -149,6 +151,8 @@ def _build_video_command():
             validate=URLValidator,
             style=style,
         ).ask()
+        if url is None:
+            sys.exit(0)
         vid_arg = url.strip()
     else:
         path = questionary.text(
@@ -156,6 +160,8 @@ def _build_video_command():
             validate=FileValidator,
             style=style,
         ).ask()
+        if path is None:
+            sys.exit(0)
         vid_arg = path.strip()
 
     # Buffer
@@ -165,6 +171,8 @@ def _build_video_command():
         default="0",
         style=style,
     ).ask()
+    if buffer_val is None:
+        sys.exit(0)
 
     # Video mode
     video_mode = questionary.confirm(
@@ -172,6 +180,8 @@ def _build_video_command():
         default=False,
         style=style,
     ).ask()
+    if video_mode is None:
+        sys.exit(0)
 
     # Character set (only in non-video mode)
     if not video_mode:
@@ -182,6 +192,8 @@ def _build_video_command():
             default="standard",
             style=style,
         ).ask()
+        if charset is None:
+            sys.exit(0)
         charset_name = charset.split(" —")[0]
     else:
         charset_name = "standard"  # unused in video mode
@@ -192,6 +204,8 @@ def _build_video_command():
         default=False,
         style=style,
     ).ask()
+    if customize_advanced is None:
+        sys.exit(0)
 
     dither = "none"
     contrast = "1.0"
@@ -204,6 +218,8 @@ def _build_video_command():
             default="none",
             style=style,
         ).ask()
+        if dither is None:
+            sys.exit(0)
 
         contrast = questionary.text(
             "Contrast enhancement factor:",
@@ -211,6 +227,8 @@ def _build_video_command():
             default="1.0",
             style=style,
         ).ask()
+        if contrast is None:
+            sys.exit(0)
 
         brightness = questionary.text(
             "Brightness enhancement factor:",
@@ -218,6 +236,8 @@ def _build_video_command():
             default="1.0",
             style=style,
         ).ask()
+        if brightness is None:
+            sys.exit(0)
 
     cmd_parts = ["uv", "run", sys.executable, "video_render.py", vid_arg]
     cmd_parts.append(f"--buffer={float(buffer_val.strip())}")
