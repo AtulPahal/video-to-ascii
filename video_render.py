@@ -133,6 +133,7 @@ class ASCIIVideoPlayer:
         self.audio_process = None
         self.audio_player = None    # name of detected audio player
         self.controls = PlaybackControls()
+        self._last_terminal_size = (0, 0)
 
         # Thread references
         self._reader = None
@@ -231,18 +232,21 @@ class ASCIIVideoPlayer:
 
     def _convert_frames(self, tid, nthreads):
         """Converter thread: pick JPEGs assigned to this tid, convert to ASCII."""
+        # Per-thread pointer avoids re-scanning already-checked frames
+        local_ptr = 0
         while not self.stopped:
-            # Find the next unconverted frame this thread owns
             idx = None
             with self.lock:
-                start = self.frames_converted
                 end = self.frames_written
-                for i in range(start, end):
+                # Scan from local_ptr, not from frames_converted
+                for i in range(max(local_ptr, 0), end):
                     if i % nthreads == tid and i not in self.queue:
                         idx = i
                         break
-                if idx is None and self.all_frames_read and start >= end:
+                if idx is None and self.all_frames_read and local_ptr >= end:
                     break
+                if idx is not None:
+                    local_ptr = idx + 1
 
             if idx is None:
                 time.sleep(0.005)
@@ -387,7 +391,6 @@ class ASCIIVideoPlayer:
         self._check_terminal_size()
         print(f"\033[H{info}")
 
-    _last_terminal_size = (0, 0)
 
     def _check_terminal_size(self):
         """Detect terminal resize and log if changed (recalc on next frame load)."""
@@ -484,6 +487,7 @@ class ASCIIVideoPlayer:
             t.join()
         if self._player and self._player.is_alive():
             self._player.join()
+
     def _start_audio(self):
         """Launch audio playback using the cross-platform audio module."""
         if self.no_audio:

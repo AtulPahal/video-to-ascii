@@ -11,6 +11,7 @@ Usage:
 """
 
 from __future__ import print_function
+import numpy as np
 
 from sty import fg, bg
 
@@ -81,8 +82,8 @@ def convert_frame(pil_image, charset="standard", video_mode=False):
     Returns:
         list[str]: Each element is one row of ASCII art including ANSI codes.
     """
-    width, height = pil_image.size
-    pixel_data = pil_image.load()
+    pixels = np.array(pil_image, dtype=np.uint8)
+    height, width = pixels.shape[:2]
 
     frame_lines = []
 
@@ -93,7 +94,7 @@ def convert_frame(pil_image, charset="standard", video_mode=False):
         for y in range(height):
             line_chars = []
             for x in range(width):
-                r, g, b = pixel_data[x, y]
+                r, g, b = pixels[y, x]
                 brightness = (r + g + b) / 3
 
                 chosen_chars, chosen_fg = VIDEO_CHARSET[thresholds[0]]
@@ -116,7 +117,7 @@ def convert_frame(pil_image, charset="standard", video_mode=False):
         for y in range(height):
             line_chars = []
             for x in range(width):
-                r, g, b = pixel_data[x, y]
+                r, g, b = pixels[y, x]
                 brightness = (r + g + b) / 3
 
                 chosen_chars = char_map[thresholds[0]]

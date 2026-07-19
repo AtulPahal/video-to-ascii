@@ -46,6 +46,7 @@ SCALE_DIVISOR = 30       # Larger = smaller ASCII output (faster)
 stopped = False
 watching_video = False   # Toggled with Right-Shift
 _watching_video_lock = Lock()
+_counter_lock = Lock()
 fps_counter = 0
 image_buffer = 0
 reset = False
@@ -93,7 +94,9 @@ def render_image_thread(tid):
 
         if has_started and last_second > 0:
             desired = FRAMERATE * (last_second + 1)
-            if image_buffer >= desired:
+            with _counter_lock:
+                ib = image_buffer
+            if ib >= desired:
                 time.sleep(0.005)
                 continue
 
@@ -107,9 +110,10 @@ def render_image_thread(tid):
         ascii_lines = convert_frame(img, video_mode=vm)
         display_frame("\n".join(ascii_lines), tid)
 
-        image_buffer += 1
         local_frames += 1
-        fps_counter += 1
+        with _counter_lock:
+            fps_counter += 1
+            image_buffer += 1
 
     sct.close()
 
