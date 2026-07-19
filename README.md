@@ -11,6 +11,8 @@ coloured ASCII art in your terminal.
 - **Discover charsets** — `--list-charsets` prints available character sets and
   exits.
 - **Loop playback** — `--loop` for infinite replay, `--loop N` to repeat N times
+- **Zero-disk-I/O pipeline** — uses a thread-safe, bounded, in-memory frame queue
+  for fast concurrent processing without writing files to disk.
 - **Skip intro** — `--no-intro` bypasses the 3-2-1 countdown
 - **Full-screen** — automatically adapts to your terminal size.
 - **Cross-platform audio** — macOS (`afplay`), Linux (`ffplay`/`aplay`/`paplay`),
@@ -117,14 +119,12 @@ uv run python3 live_render.py
 
 ## How it works
 
-1. Video is downloaded (YouTube) or opened (local file) via OpenCV.
-2. Each frame is resized to fit your terminal, then every pixel is mapped
-   to an ASCII character based on brightness.
-3. Characters are coloured with ANSI true-colour escape codes matching
-   the original pixel colour (or background-coloured in video mode).
-4. Frames are printed at the video's native framerate using `\033[H`
-   to overwrite in place — no flickering or scrolling.
-5. Audio plays in a background process synced to the video duration.
+1. **Video Ingestion:** Video is downloaded (YouTube) or opened (local file) via OpenCV.
+2. **Pipelined In-Memory Queue:** The reader thread reads and resizes frames, pushing them into a bounded, thread-safe memory queue (no slow disk I/O or temporary files).
+3. **Parallel ASCII Conversion:** Multiple background converter threads pull frames from the queue, converting every pixel to ANSI-coloured ASCII characters concurrently.
+4. **ANSI True-Colour Escape Codes:** Characters are coloured matching the original pixel colour (or background-coloured in block video mode).
+5. **Smooth Playback:** The playback thread consumes converted frames and prints them at the native framerate using `\033[H` to overwrite the terminal in-place with zero flickering.
+6. **Synchronized Audio:** Audio plays via a cross-platform background subprocess synced to the video duration.
 
 ## Requirements
 
