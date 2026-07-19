@@ -256,10 +256,15 @@ def main():
 
     # Fetch actual coordinates using mss
     with mss.mss() as sct:
-        if args.monitor < 0 or args.monitor >= len(sct.monitors):
-            print(f"Error: Monitor index {args.monitor} is out of range. Available monitors: 0 to {len(sct.monitors)-1}", file=sys.stderr)
+        monitor_idx = args.monitor
+        # Fall back to index 0 if the default index 1 is out of range (e.g. single-monitor VM or container)
+        if monitor_idx == 1 and len(sct.monitors) == 1:
+            monitor_idx = 0
+
+        if monitor_idx < 0 or monitor_idx >= len(sct.monitors):
+            print(f"Error: Monitor index {monitor_idx} is out of range. Available monitors: 0 to {len(sct.monitors)-1}", file=sys.stderr)
             sys.exit(1)
-        monitor_info = dict(sct.monitors[args.monitor])
+        monitor_info = dict(sct.monitors[monitor_idx])
 
     if args.region:
         try:
