@@ -132,3 +132,7 @@ uv run python3 live_render.py
 - Python 3.9+
 - `uv` or `pip` for dependencies
 - macOS, Linux, or Windows terminal with true-colour ANSI support
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
