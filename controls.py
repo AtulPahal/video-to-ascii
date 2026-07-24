@@ -53,9 +53,9 @@ class PlaybackControls:
                 self._seek_offset += self.SEEK_STEP_SECONDS
             elif k == keyboard.Key.left or k in ("j", "J"):
                 self._seek_offset -= self.SEEK_STEP_SECONDS
-            elif k in (">", ".", "]", "+"):
+            elif k in (">", "."):
                 self._speed_delta += 0.25
-            elif k in ("<", ",", "[", "-"):
+            elif k in ("<", ","):
                 self._speed_delta -= 0.25
             elif k in ("0", "r", "R"):
                 self._speed_reset = True
