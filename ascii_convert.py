@@ -175,24 +175,26 @@ def convert_frame(pil_image, charset="standard", video_mode=False,
         # Pad to avoid boundary checks: +1 row at bottom, +1 col at left and right
         padded = np.zeros((height + 1, width + 2), dtype=np.float32)
         padded[:height, 1:width+1] = brightness_arr.astype(np.float32)
+        padded_list = padded.tolist()
+        closest_lut_list = closest_threshold_lut.tolist()
 
         for y in range(height):
             for x in range(1, width + 1):
-                v = padded[y, x]
+                v = padded_list[y][x]
                 # Clip input to [0.0, 255.0]
                 v_clipped = 0.0 if v < 0.0 else (255.0 if v > 255.0 else v)
                 idx = int(v_clipped + 0.5)
-                closest = closest_threshold_lut[idx]
+                closest = closest_lut_list[idx]
                 err = v - closest
 
-                padded[y, x] = closest
+                padded_list[y][x] = closest
                 # Diffuse error to neighbors
-                padded[y, x + 1]     += err * 0.4375    # 7/16
-                padded[y + 1, x - 1] += err * 0.1875    # 3/16
-                padded[y + 1, x]     += err * 0.3125    # 5/16
-                padded[y + 1, x + 1] += err * 0.0625    # 1/16
+                padded_list[y][x + 1]     += err * 0.4375    # 7/16
+                padded_list[y + 1][x - 1] += err * 0.1875    # 3/16
+                padded_list[y + 1][x]     += err * 0.3125    # 5/16
+                padded_list[y + 1][x + 1] += err * 0.0625    # 1/16
 
-        brightness_arr = padded[:height, 1:width+1].astype(np.uint8)
+        brightness_arr = np.array(padded_list, dtype=np.float32)[:height, 1:width+1].astype(np.uint8)
 
     # Convert to Python native lists/tuples for fast traversal inside list comprehensions
     pixels_list = pixels.tolist()
