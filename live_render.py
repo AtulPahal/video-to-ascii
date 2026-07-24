@@ -133,7 +133,7 @@ def render_image_thread(tid):
                 height = max(MONITOR["height"] // scale, 1)
                 width = max(MONITOR["width"] // scale, 1)
             else:
-                cols, lines = shutil.get_terminal_size((80, 24))
+                cols, lines = _last_terminal_size
                 max_w = max(1, (cols - 2) // 2)
                 max_h = max(1, lines - 4)
                 aspect_ratio = MONITOR["width"] / MONITOR["height"]

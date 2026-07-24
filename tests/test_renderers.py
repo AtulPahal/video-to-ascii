@@ -368,6 +368,7 @@ class TestLiveRender(unittest.TestCase):
         
         live_render.MONITOR = {"width": 1920, "height": 1080}
         live_render.stopped = False
+        live_render._last_terminal_size = (80, 24)
         
         live_render.render_image_thread(0)
         
