@@ -371,12 +371,12 @@ class ASCIIVideoPlayer:
                                       contrast=self.args.contrast,
                                       brightness=self.args.brightness,
                                       dither=self.args.dither)
-                ascii_str = "\n".join(lines)
+                ascii_item = lines
                 with self.lock:
-                    self.queue[idx] = ascii_str
+                    self.queue[idx] = ascii_item
                     if idx >= len(self._all_ascii_frames):
                         self._all_ascii_frames.extend([None] * (idx + 1 - len(self._all_ascii_frames)))
-                    self._all_ascii_frames[idx] = ascii_str
+                    self._all_ascii_frames[idx] = ascii_item
                     if idx == self.frames_converted:
                         while self.frames_converted < len(self._all_ascii_frames) and self._all_ascii_frames[self.frames_converted] is not None:
                             self.frames_converted += 1
@@ -384,10 +384,10 @@ class ASCIIVideoPlayer:
                 if not self.stopped:
                     print(f"{Colours.FAIL}Error converting frame {idx}: {e}{Colours.END}", file=sys.stderr)
                 with self.lock:
-                    self.queue[idx] = ""
+                    self.queue[idx] = []
                     if idx >= len(self._all_ascii_frames):
                         self._all_ascii_frames.extend([None] * (idx + 1 - len(self._all_ascii_frames)))
-                    self._all_ascii_frames[idx] = ""
+                    self._all_ascii_frames[idx] = []
                     if idx == self.frames_converted:
                         while self.frames_converted < len(self._all_ascii_frames) and self._all_ascii_frames[self.frames_converted] is not None:
                             self.frames_converted += 1
@@ -578,7 +578,7 @@ class ASCIIVideoPlayer:
         self._check_terminal_size(current_idx=max(0, num - 1))
 
         # Parse video dimensions and calculate margins
-        video_lines = item.splitlines()
+        video_lines = item
         if self.ascii_width is None:
             self.ascii_width = _visible_length(video_lines[0]) if video_lines else 0
         vw = self.ascii_width
@@ -725,7 +725,7 @@ class ASCIIVideoPlayer:
         # Write HTML export if requested
         if self.export_html and self._all_ascii_frames:
             try:
-                valid_frames = [f for f in self._all_ascii_frames if f is not None]
+                valid_frames = ["\n".join(f) for f in self._all_ascii_frames if f is not None]
                 if valid_frames:
                     write_html(valid_frames, self.framerate, self.export_html)
                     print(f"{Colours.GREEN}ASCII animation saved to {self.export_html}{Colours.END}")

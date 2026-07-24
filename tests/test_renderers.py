@@ -166,7 +166,7 @@ class TestVideoRender(unittest.TestCase):
         
         self.assertEqual(player.frames_converted, 1)
         self.assertIn(0, player.queue)
-        self.assertEqual(player.queue[0], "#\n#")
+        self.assertEqual(player.queue[0], ["#", "#"])
 
     @patch("sys.argv", ["video_render.py", "video.mp4"])
     @patch("video_render.stop_audio")
