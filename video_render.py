@@ -132,6 +132,7 @@ class ASCIIVideoPlayer:
         self.no_intro = args.no_intro
         self.override_w = args.width
         self.override_h = args.height
+        self.filename = os.path.basename(args.vid) if args.vid else "Video"
 
         # Populated by load_video()
         self.framerate = args.framerate
@@ -597,8 +598,7 @@ class ASCIIVideoPlayer:
         border_end = "\033[0m"
 
         # 1. Header
-        filename = os.path.basename(self.args.vid) if self.args.vid else "Video"
-        header_text = f" {filename} - {self.framerate:.1f} FPS - {status} "
+        header_text = f" {self.filename} - {self.framerate:.1f} FPS - {status} "
         header_styled = f"\033[96;1m{header_text}\033[0m"
         header_len = len(header_text)
 
