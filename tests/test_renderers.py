@@ -270,7 +270,7 @@ class TestVideoRender(unittest.TestCase):
 class TestLiveRender(unittest.TestCase):
 
     @patch("sys.argv", ["live_render.py", "--monitor", "0", "--region", "10,20,30,40", "--framerate", "15", "--scale", "2", "--video-mode", "--threads", "2"])
-    @patch("live_render.mss.mss")
+    @patch("live_render.mss.MSS")
     @patch("live_render.keyboard.Listener")
     @patch("live_render.Thread")
     @patch("live_render.timing_module")
@@ -305,7 +305,7 @@ class TestLiveRender(unittest.TestCase):
         mock_thread.start.assert_called()
 
     @patch("sys.argv", ["live_render.py", "--monitor", "0", "--region", "10,20"])
-    @patch("live_render.mss.mss")
+    @patch("live_render.mss.MSS")
     def test_live_parse_args_invalid_region(self, mock_mss_class):
         mock_sct = MagicMock()
         mock_sct.monitors = [{"left": 0, "top": 0, "width": 100, "height": 100}]
@@ -316,7 +316,7 @@ class TestLiveRender(unittest.TestCase):
                 live_render.main()
 
     @patch("sys.argv", ["live_render.py", "--monitor", "5"])
-    @patch("live_render.mss.mss")
+    @patch("live_render.mss.MSS")
     def test_live_parse_args_invalid_monitor(self, mock_mss_class):
         mock_sct = MagicMock()
         mock_sct.monitors = [{"left": 0, "top": 0, "width": 100, "height": 100}]
@@ -337,7 +337,7 @@ class TestLiveRender(unittest.TestCase):
         live_render.input_checker(keyboard.Key.space)
         self.assertFalse(live_render.watching_video)
 
-    @patch("live_render.mss.mss")
+    @patch("live_render.mss.MSS")
     @patch("shutil.get_terminal_size")
     @patch("PIL.Image.frombytes")
     @patch("live_render.convert_frame")
@@ -381,7 +381,7 @@ class TestLiveRender(unittest.TestCase):
         # So width = int(20 * 1.77777) = 35, height = 20
         mock_img.resize.assert_called_once_with((35, 20), ANY)
 
-    @patch("live_render.mss.mss")
+    @patch("live_render.mss.MSS")
     @patch("PIL.Image.frombytes")
     @patch("live_render.convert_frame")
     @patch("live_render.display_frame")

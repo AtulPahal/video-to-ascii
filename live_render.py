@@ -95,7 +95,7 @@ def render_image_thread(tid):
     """Capture screen region → convert to ASCII → display."""
     global fps_counter, image_buffer, reset
 
-    sct = mss.mss()
+    sct = mss.MSS()
     try:
         framerate = args.framerate if (args and hasattr(args, "framerate")) else 30
         scale = args.scale if (args and hasattr(args, "scale")) else None
@@ -260,7 +260,7 @@ def main():
         watching_video = args.video_mode
 
     # Fetch actual coordinates using mss
-    with mss.mss() as sct:
+    with mss.MSS() as sct:
         monitor_idx = args.monitor
         # Fall back to index 0 if the default index 1 is out of range (e.g. single-monitor VM or container)
         if monitor_idx == 1 and len(sct.monitors) == 1:
