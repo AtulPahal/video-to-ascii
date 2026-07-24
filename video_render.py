@@ -163,7 +163,7 @@ class ASCIIVideoPlayer:
         self.audio_process = None
         self.audio_player = None    # name of detected audio player
         self.controls = PlaybackControls()
-        self._last_terminal_size = (0, 0)
+        self._last_terminal_size = shutil.get_terminal_size((80, 24))
         self._last_shown_item = None
         self._last_shown_idx = 0
         self.times_played = 0
@@ -580,10 +580,11 @@ class ASCIIVideoPlayer:
             now = time.time()
         elapsed = now - self.begin_time
 
-        cols, lines = shutil.get_terminal_size((80, 24))
+        # Check terminal resize once every 5 frames
+        if num % 5 == 0:
+            self._check_terminal_size(current_idx=max(0, num - 1))
 
-        # Check terminal resize each frame
-        self._check_terminal_size(current_idx=max(0, num - 1))
+        cols, lines = self._last_terminal_size
 
         # Parse video dimensions and calculate margins
         video_lines = item
