@@ -10,7 +10,7 @@ class TestFixes(unittest.TestCase):
     # Bug #1: VideoNotYoutubeLink exception handling
     def test_video_not_youtube_link_handled(self):
         res = subprocess.run(
-            ["uv", "run", "python3", "video_render.py", "https://google.com"],
+            [sys.executable, "video_render.py", "https://google.com"],
             capture_output=True, text=True, timeout=10, cwd=REPO_DIR
         )
         self.assertEqual(res.returncode, 1)
@@ -20,7 +20,7 @@ class TestFixes(unittest.TestCase):
     # Bug #2: --threads=0 hang prevention
     def test_live_render_threads_zero_handled(self):
         res = subprocess.run(
-            ["uv", "run", "python3", "live_render.py", "--threads=0"],
+            [sys.executable, "live_render.py", "--threads=0"],
             capture_output=True, text=True, timeout=5, cwd=REPO_DIR
         )
         self.assertEqual(res.returncode, 1)
