@@ -161,7 +161,7 @@ def render_image_thread(tid):
             with _watching_video_lock:
                 vm = watching_video
             ascii_lines = convert_frame(img, video_mode=vm, contrast=contrast, brightness=brightness, dither=dither)
-            display_frame("\n".join(ascii_lines), tid)
+            display_frame(ascii_lines, tid)
 
             with _counter_lock:
                 fps_counter += 1
@@ -190,7 +190,7 @@ def display_frame(item, tid):
         print("\033[2J\033[H", end="", flush=True)
 
     # Parse video dimensions and calculate margins
-    video_lines = item.splitlines()
+    video_lines = item
     if _ascii_width is None:
         _ascii_width = _visible_length(video_lines[0]) if video_lines else 0
     vw = _ascii_width
