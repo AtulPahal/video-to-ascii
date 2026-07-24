@@ -104,6 +104,12 @@ def render_image_thread(tid):
         brightness = args.brightness if (args and hasattr(args, "brightness")) else 1.0
         dither = args.dither if (args and hasattr(args, "dither")) else "none"
 
+        if hasattr(Image, "Resampling"):
+            resample_filter = Image.Resampling.BOX
+        elif hasattr(Image, "BOX"):
+            resample_filter = Image.BOX
+        else:
+            resample_filter = Image.BILINEAR
         while True:
             with _timing_lock:
                 if stopped:
@@ -149,13 +155,6 @@ def render_image_thread(tid):
                 continue
             img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
             
-            if hasattr(Image, "Resampling"):
-                resample_filter = Image.Resampling.BOX
-            elif hasattr(Image, "BOX"):
-                resample_filter = Image.BOX
-            else:
-                resample_filter = Image.BILINEAR
-                
             img = img.resize((width, height), resample_filter)
 
             with _watching_video_lock:
