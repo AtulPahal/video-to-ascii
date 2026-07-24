@@ -611,8 +611,10 @@ class ASCIIVideoPlayer:
 
         # 2. Body lines (centered)
         body_rows = []
+        pad_w_str = ' ' * pad_w
+        pad_right_str = ' ' * pad_right
         for vl in video_lines:
-            body_rows.append(f"{border_color}│{border_end}{' ' * pad_w}{vl}{' ' * pad_right}{border_color}│{border_end}")
+            body_rows.append(f"{border_color}│{border_end}{pad_w_str}{vl}{pad_right_str}{border_color}│{border_end}")
 
         # 3. Divider
         divider_line = f"{border_color}├{'─' * (cols - 2)}┤{border_end}"
