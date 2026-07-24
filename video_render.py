@@ -244,6 +244,9 @@ class ASCIIVideoPlayer:
                           f"{self.total_frames} frames @ {self.framerate:.1f} fps, "
                           f"{self.duration:.1f}s{Colours.END}")
                     return True
+                else:
+                    self.video_cap.release()
+                    self.video_cap = None
 
         # Download fallback or explicit --download-first
         temp_download = os.path.join(tempfile.mkdtemp(prefix="ytdl_"), "video.mp4")
@@ -442,12 +445,19 @@ class ASCIIVideoPlayer:
                 speed_info = self.controls.consume_speed_change()
                 if isinstance(speed_info, (tuple, list)) and len(speed_info) == 2:
                     speed_delta, speed_reset = speed_info
+                    changed = False
                     if speed_reset:
                         self.speed = 1.0
-                        delay = 1.0 / (self.framerate * self.speed) if self.framerate > 0 else 1.0 / 30.0
+                        changed = True
                     elif speed_delta != 0.0:
                         self.speed = max(0.25, min(4.0, self.speed + speed_delta))
+                        changed = True
+                    
+                    if changed:
                         delay = 1.0 / (self.framerate * self.speed) if self.framerate > 0 else 1.0 / (30.0 * self.speed)
+                        now = datetime.datetime.now()
+                        self.begin_time = now - datetime.timedelta(seconds=idx / (self.framerate * self.speed) if self.framerate > 0 else 0)
+                        self.frame_begin_time = now
                 # --- Pause ---
                 if self.controls.is_paused():
                     if pause_start is None:
