@@ -19,7 +19,6 @@ except ImportError:
     print(f"{Colours.FAIL}Missing dependency: questionary. Install with: uv pip install questionary{Colours.END}")
     sys.exit(1)
 
-from ascii_convert import list_charsets
 
 style = questionary.Style([
     ('qmark', 'fg:#00f0ff bold'),       # Neon cyan question mark
@@ -185,6 +184,7 @@ def _build_video_command():
 
     # Character set (only in non-video mode)
     if not video_mode:
+        from ascii_convert import list_charsets
         charsets = list_charsets()
         charset = questionary.select(
             "Character set:",
