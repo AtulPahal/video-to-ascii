@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch, MagicMock, ANY
 import sys
+import time
 import os
 import shutil
 import datetime
@@ -179,8 +180,8 @@ class TestVideoRender(unittest.TestCase):
         player.framerate = 30
         player.speed = 1.0
         player.total_frames = 5
-        player.begin_time = datetime.datetime.now()
-        player.frame_begin_time = datetime.datetime.now()
+        player.begin_time = time.time()
+        player.frame_begin_time = time.time()
         player.queue[0] = "FRAME0"
         
         player.controls = MagicMock()

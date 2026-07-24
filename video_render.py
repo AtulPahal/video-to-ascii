@@ -447,8 +447,8 @@ class ASCIIVideoPlayer:
                         pause_audio(self.audio_process)
 
                     # Fix seek timing
-                    now = datetime.datetime.now()
-                    self.begin_time = now - datetime.timedelta(seconds=current_time)
+                    now = time.time()
+                    self.begin_time = now - current_time
                     self.frame_begin_time = now
                     if pause_start is not None:
                         pause_start = now
@@ -467,13 +467,13 @@ class ASCIIVideoPlayer:
                     
                     if changed:
                         delay = 1.0 / (self.framerate * self.speed) if self.framerate > 0 else 1.0 / (30.0 * self.speed)
-                        now = datetime.datetime.now()
-                        self.begin_time = now - datetime.timedelta(seconds=idx / (self.framerate * self.speed) if self.framerate > 0 else 0)
+                        now = time.time()
+                        self.begin_time = now - (idx / (self.framerate * self.speed) if self.framerate > 0 else 0)
                         self.frame_begin_time = now
                 # --- Pause ---
                 if self.controls.is_paused():
                     if pause_start is None:
-                        pause_start = datetime.datetime.now()
+                        pause_start = time.time()
                     if not audio_was_paused:
                         # Suspend audio. If not supported (e.g. Windows), stop it.
                         if not pause_audio(self.audio_process):
@@ -481,7 +481,7 @@ class ASCIIVideoPlayer:
                         audio_was_paused = True
                     cols, _ = shutil.get_terminal_size((80, 24))
                     if self._last_shown_item is not None:
-                        self._show_frame(self._last_shown_item, self._last_shown_idx, datetime.datetime.now(), status="PAUSED")
+                        self._show_frame(self._last_shown_item, self._last_shown_idx, time.time(), status="PAUSED")
                     else:
                         fallback_top = f"\033[90m┌{'─' * (cols - 2)}┐\033[0m"
                         fallback_mid = f"\033[90m│\033[0m\033[96;1m Loading... \033[0m{' ' * (cols - 16)}\033[90m│\033[0m"
@@ -492,7 +492,7 @@ class ASCIIVideoPlayer:
 
                 # --- Resume ---
                 if pause_start is not None:
-                    pause_duration = datetime.datetime.now() - pause_start
+                    pause_duration = time.time() - pause_start
                     self.begin_time += pause_duration
                     self.frame_begin_time += pause_duration
                     pause_start = None
@@ -505,8 +505,8 @@ class ASCIIVideoPlayer:
                     audio_was_paused = False
 
                 # --- Frame dropping to prevent audio-video drift ---
-                now = datetime.datetime.now()
-                elapsed_seconds = (now - self.begin_time).total_seconds()
+                now = time.time()
+                elapsed_seconds = now - self.begin_time
                 target_idx = int(elapsed_seconds * self.framerate * self.speed)
                 if target_idx > idx:
                     with self.lock:
@@ -524,8 +524,8 @@ class ASCIIVideoPlayer:
                     # Reset for next loop
                     idx = 0
                     all_cached = all(f is not None for f in self._all_ascii_frames)
-                    self.begin_time = datetime.datetime.now()
-                    self.frame_begin_time = datetime.datetime.now()
+                    self.begin_time = time.time()
+                    self.frame_begin_time = time.time()
                     pause_start = None
                     # Restart audio for new loop
                     stop_audio(self.audio_process)
@@ -559,12 +559,12 @@ class ASCIIVideoPlayer:
                 self._last_shown_idx = idx
 
                 # --- Timing ---
-                now = datetime.datetime.now()
-                elapsed = (now - self.frame_begin_time).total_seconds()
+                now = time.time()
+                elapsed = now - self.frame_begin_time
                 remaining = delay - elapsed
                 if remaining > 0:
                     time.sleep(remaining)
-                    now = datetime.datetime.now()  # re-read after sleep
+                    now = time.time()  # re-read after sleep
                 self.frame_begin_time = now
 
                 self._show_frame(item, idx, now)
@@ -576,7 +576,7 @@ class ASCIIVideoPlayer:
     def _show_frame(self, item, num, now=None, status="PLAYING"):
         """Print one frame to the terminal inside a Unicode Box Dashboard."""
         if now is None:
-            now = datetime.datetime.now()
+            now = time.time()
         elapsed = now - self.begin_time
 
         cols, lines = shutil.get_terminal_size((80, 24))
@@ -646,7 +646,7 @@ class ASCIIVideoPlayer:
             progress_line = f"{border_color}│{border_end}{' ' * left_margin}{progress_text}{' ' * right_space}{border_color}│{border_end}"
 
         # 5. Footer Line 2: Time, Speed, Loop
-        elapsed_sec = int(elapsed.total_seconds()) if elapsed else 0
+        elapsed_sec = int(elapsed) if elapsed else 0
         elapsed_str = f"{elapsed_sec // 60:02d}:{elapsed_sec % 60:02d}"
         duration_sec = int(self.duration)
         duration_str = f"{duration_sec // 60:02d}:{duration_sec % 60:02d}"
@@ -798,8 +798,8 @@ class ASCIIVideoPlayer:
                 self.playback_started = True
 
                 self._start_audio()
-                self.begin_time = datetime.datetime.now()
-                self.frame_begin_time = datetime.datetime.now()
+                self.begin_time = time.time()
+                self.frame_begin_time = time.time()
                 self._player = Thread(target=self._play_loop, daemon=True)
                 self._player.start()
 
