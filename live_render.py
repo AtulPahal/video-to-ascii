@@ -150,10 +150,11 @@ def render_image_thread(tid):
             img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
             
             if hasattr(Image, "Resampling"):
-                resample_filter = Image.Resampling.LANCZOS
+                resample_filter = Image.Resampling.BOX
+            elif hasattr(Image, "BOX"):
+                resample_filter = Image.BOX
             else:
-                resample_filter = Image.ANTIALIAS
-                
+                resample_filter = Image.BILINEAR
                 
             img = img.resize((width, height), resample_filter)
 
