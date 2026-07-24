@@ -538,12 +538,12 @@ class ASCIIVideoPlayer:
                 # --- Consume next frame ---
                 item = None
                 with self.lock:
-                    if idx in self.queue:
+                    if idx < len(self._all_ascii_frames) and self._all_ascii_frames[idx] is not None:
+                        item = self._all_ascii_frames[idx]
+                    elif idx in self.queue:
                         item = self.queue.pop(idx)
                         if idx < len(self._all_ascii_frames) and self._all_ascii_frames[idx] is None:
                             self._all_ascii_frames[idx] = item
-                    elif idx < len(self._all_ascii_frames):
-                        item = self._all_ascii_frames[idx]
 
                 if item is None:
                     # Restart processing threads if they died and frame is missing
