@@ -376,8 +376,9 @@ class ASCIIVideoPlayer:
                     if idx >= len(self._all_ascii_frames):
                         self._all_ascii_frames.extend([None] * (idx + 1 - len(self._all_ascii_frames)))
                     self._all_ascii_frames[idx] = ascii_str
-                    while self.frames_converted < len(self._all_ascii_frames) and self._all_ascii_frames[self.frames_converted] is not None:
-                        self.frames_converted += 1
+                    if idx == self.frames_converted:
+                        while self.frames_converted < len(self._all_ascii_frames) and self._all_ascii_frames[self.frames_converted] is not None:
+                            self.frames_converted += 1
             except Exception as e:
                 if not self.stopped:
                     print(f"{Colours.FAIL}Error converting frame {idx}: {e}{Colours.END}", file=sys.stderr)
@@ -386,6 +387,9 @@ class ASCIIVideoPlayer:
                     if idx >= len(self._all_ascii_frames):
                         self._all_ascii_frames.extend([None] * (idx + 1 - len(self._all_ascii_frames)))
                     self._all_ascii_frames[idx] = ""
+                    if idx == self.frames_converted:
+                        while self.frames_converted < len(self._all_ascii_frames) and self._all_ascii_frames[self.frames_converted] is not None:
+                            self.frames_converted += 1
     def _play_loop(self):
         """Playback thread: consume queue at the correct framerate.
         Supports --loop (infinite or N repeats).
