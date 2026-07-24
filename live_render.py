@@ -11,7 +11,6 @@ import shutil
 import sys
 import argparse
 import time
-from datetime import datetime as dt
 from threading import Lock, Thread
 import cursor
 try:
@@ -76,16 +75,16 @@ def timing_module():
 
     with _timing_lock:
         last_second = 0
-        start_time = dt.now()
+        start_time = time.time()
         has_started = True
 
     while True:
         with _timing_lock:
             if stopped:
                 break
-        now = dt.now()
+        now = time.time()
         with _timing_lock:
-            elapsed = (now - start_time).seconds
+            elapsed = int(now - start_time)
             if elapsed >= last_second + 1:
                 last_second += 1
                 reset = True
@@ -174,8 +173,7 @@ def display_frame(item, tid):
     global _last_terminal_size, _ascii_width
     with _timing_lock:
         curr_start_time = start_time
-    elapsed = dt.now() - curr_start_time if curr_start_time else 0
-    elapsed_sec = int(elapsed.total_seconds()) if elapsed else 0
+    elapsed_sec = int(time.time() - curr_start_time) if curr_start_time else 0
     elapsed_str = f"{elapsed_sec // 60:02d}:{elapsed_sec % 60:02d}"
 
     with _watching_video_lock:
