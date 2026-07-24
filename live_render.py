@@ -34,7 +34,7 @@ from colours import Colours
 
 _ANSI_STRIP_RE = re.compile(r'\x1b\[[0-9;]*m')
 _last_terminal_size = (0, 0)
-
+_ascii_width = None
 def _visible_length(s):
     """Return length of string without ANSI escape sequences."""
     return len(_ANSI_STRIP_RE.sub('', s))
@@ -172,7 +172,7 @@ def render_image_thread(tid):
 
 def display_frame(item, tid):
     """Print a single frame to the terminal."""
-    global _last_terminal_size
+    global _last_terminal_size, _ascii_width
     with _timing_lock:
         curr_start_time = start_time
     elapsed = dt.now() - curr_start_time if curr_start_time else 0
@@ -185,14 +185,15 @@ def display_frame(item, tid):
     cols, lines = shutil.get_terminal_size((80, 24))
     if (cols, lines) != _last_terminal_size:
         _last_terminal_size = (cols, lines)
+        _ascii_width = None
         # Clear terminal completely to avoid residual layout artifacts on resize
         print("\033[2J\033[H", end="", flush=True)
 
     # Parse video dimensions and calculate margins
     video_lines = item.splitlines()
-    vw = _visible_length(video_lines[0]) if video_lines else 0
-    pad_w = max(0, (cols - 2 - vw) // 2)
-    pad_right = max(0, cols - 2 - vw - pad_w)
+    if _ascii_width is None:
+        _ascii_width = _visible_length(video_lines[0]) if video_lines else 0
+    vw = _ascii_width
 
     # Style colors
     border_color = "\033[90m"
