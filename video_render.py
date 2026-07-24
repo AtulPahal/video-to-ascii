@@ -45,7 +45,7 @@ def intro():
     return True
 
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 _ANSI_STRIP_RE = re.compile(r'\x1b\[[0-9;]*m')
 
