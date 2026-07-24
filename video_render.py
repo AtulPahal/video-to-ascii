@@ -800,7 +800,8 @@ class ASCIIVideoPlayer:
         """Launch audio playback using the cross-platform audio module."""
         if self.no_audio:
             return
-        if not self.audio_path or not os.path.isfile(self.audio_path):
+        is_url = isinstance(self.audio_path, str) and (self.audio_path.startswith("http://") or self.audio_path.startswith("https://"))
+        if not self.audio_path or (not is_url and not os.path.isfile(self.audio_path)):
             return
         if not self.audio_player:
             return
