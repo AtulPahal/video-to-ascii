@@ -148,12 +148,8 @@ def convert_frame(pil_image, charset="standard", video_mode=False,
     pixels = np.array(pil_image, dtype=np.uint8)
     height, width = pixels.shape[:2]
 
-    # 2. Standard luminance grayscale formula: (R * 299 + G * 587 + B * 114) // 1000
-    # Ensure np.uint32 is used for intermediate sums to prevent overflow.
-    r_chan = pixels[:, :, 0].astype(np.uint32)
-    g_chan = pixels[:, :, 1].astype(np.uint32)
-    b_chan = pixels[:, :, 2].astype(np.uint32)
-    brightness_arr = (r_chan * 299 + g_chan * 587 + b_chan * 114) // 1000
+    # 2. Convert to grayscale using Pillow's C-optimized "L" mode
+    brightness_arr = np.array(pil_image.convert("L"), dtype=np.uint8)
 
     # 3. Dithering
     if dither == "ordered":
