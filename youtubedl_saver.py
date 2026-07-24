@@ -12,12 +12,12 @@ except ImportError:
 
 
 QUALITY_MAP = {
-    "1080p": "best[height<=1080][ext=mp4]/best[height<=1080]/best",
-    "720p": "best[height<=720][ext=mp4]/best[height<=720]/best",
-    "480p": "best[height<=480][ext=mp4]/best[height<=480]/best",
-    "360p": "best[height<=360][ext=mp4]/best[height<=360]/best",
-    "240p": "best[height<=240][ext=mp4]/best[height<=240]/best",
-    "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+    "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+    "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
+    "240p": "bestvideo[height<=240]+bestaudio/best[height<=240]/best",
+    "best": "bestvideo+bestaudio/best",
 }
 
 def get_stream_info(url, quality="720p"):
@@ -26,44 +26,31 @@ def get_stream_info(url, quality="720p"):
         return "error", "error", 0, 0, 0
 
     fmt = QUALITY_MAP.get(quality, QUALITY_MAP["720p"])
-    ydl_opts_video = {
+    ydl_opts = {
         "format": fmt,
         "quiet": True,
         "extractor_args": {"youtube": {"player_client": ["android", "web_creator"]}}
     }
-    ydl_opts_audio = {
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
-        "quiet": True,
-        "extractor_args": {"youtube": {"player_client": ["android", "web_creator"]}}
-    }
 
-    with youtube_dl.YoutubeDL(ydl_opts_video) as ydl_v:
+    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
         try:
-            info = ydl_v.extract_info(url=url, download=False)
+            info = ydl.extract_info(url=url, download=False)
             requested = info.get("requested_formats")
             if requested and len(requested) >= 1:
                 video_url = requested[0].get("url")
+                if len(requested) >= 2:
+                    audio_url = requested[1].get("url")
+                else:
+                    audio_url = video_url
             else:
                 video_url = info.get("url")
                 if not video_url and "formats" in info and info["formats"]:
                     video_url = info["formats"][-1].get("url")
+                audio_url = video_url
 
             fps = info.get("fps") or 30.0
             duration = info.get("duration") or 0
             total_frames = int(fps * duration)
-
-            audio_url = None
-            if requested and len(requested) >= 2:
-                audio_url = requested[1].get("url")
-
-            if not audio_url:
-                try:
-                    with youtube_dl.YoutubeDL(ydl_opts_audio) as ydl_a:
-                        a_info = ydl_a.extract_info(url=url, download=False)
-                        if a_info and a_info.get("url"):
-                            audio_url = a_info.get("url")
-                except Exception:
-                    audio_url = video_url
 
             return video_url, audio_url, fps, total_frames, duration
         except Exception as e:
