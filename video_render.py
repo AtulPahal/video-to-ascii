@@ -424,6 +424,13 @@ class ASCIIVideoPlayer:
                             item_ready = (self._all_ascii_frames[idx] is not None)
 
                     if not item_ready:
+                        # Clear the frame queue of stale pre-seek frames
+                        while not self.frame_queue.empty():
+                            try:
+                                self.frame_queue.get_nowait()
+                            except queue.Empty:
+                                break
+
                         with self.lock:
                             reader_alive = (self._reader and self._reader.is_alive())
                         if reader_alive:
