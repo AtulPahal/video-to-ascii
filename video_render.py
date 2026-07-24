@@ -145,6 +145,7 @@ class ASCIIVideoPlayer:
         self._all_ascii_frames = []       # accumulated for loop cache / HTML export
         self.seek_request_frame = None
         self.terminal_resized = False
+        self.ascii_width = None
         # Threading state
         self.stopped = False
         self.frames_written = 0     # frames saved as JPEG
@@ -578,7 +579,9 @@ class ASCIIVideoPlayer:
 
         # Parse video dimensions and calculate margins
         video_lines = item.splitlines()
-        vw = _visible_length(video_lines[0]) if video_lines else 0
+        if self.ascii_width is None:
+            self.ascii_width = _visible_length(video_lines[0]) if video_lines else 0
+        vw = self.ascii_width
         pad_w = max(0, (cols - 2 - vw) // 2)
         pad_right = max(0, cols - 2 - vw - pad_w)
 
@@ -693,6 +696,7 @@ class ASCIIVideoPlayer:
                 self._all_ascii_frames = [None] * self.total_frames
                 self.frames_converted = current_idx
                 self.seek_request_frame = current_idx
+                self.ascii_width = None
 
     def _cleanup_owned(self):
         """Remove the downloaded video file and its parent temp directory."""
