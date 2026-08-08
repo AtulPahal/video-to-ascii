@@ -1,4 +1,4 @@
-# Video To ASCII
+# Video To ASCII 
 
 A Python generator that converts YouTube videos or local video files to
 coloured ASCII art in your terminal.
